@@ -3,7 +3,7 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include <llvm-19/llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
