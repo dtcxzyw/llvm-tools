@@ -3,6 +3,7 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
+#include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/Attributes.h>
@@ -16,10 +17,12 @@
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
+#include <llvm/IR/PatternMatch.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Verifier.h>
@@ -31,16 +34,19 @@
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FormattedStream.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 
 constexpr uint32_t Bits = 128;
+constexpr uint32_t MinBitWidth = 4;
 
 using namespace llvm;
 namespace fs = std::filesystem;
@@ -55,6 +61,10 @@ static cl::opt<std::string>
     OutputDir(cl::Positional, cl::desc("<directory for LLVM IR outputs>"),
               cl::Required, cl::value_desc("output"),
               cl::cat(VectorizerCategory));
+
+static cl::opt<bool> AutoScale("auto-scale",
+                               cl::desc("Enable auto bit width reducing"),
+                               cl::init(true), cl::cat(VectorizerCategory));
 
 static uint32_t getTypeBits(Type *Ty, const DataLayout &DL) {
   if (Ty->isIntegerTy())
@@ -107,15 +117,117 @@ static uint32_t getMaxElementCount(Function &F, const DataLayout &DL) {
   return MaxElementCount;
 }
 
-static Type *getVectorType(Type *Ty, uint32_t Count) {
+static uint32_t getMaxScale(Type *Ty, const DataLayout &DL) {
+  if (Ty->isVoidTy() || Ty->isIntegerTy(1))
+    return 255U;
+  if (Ty->isIntegerTy()) {
+    uint32_t Size = Ty->getIntegerBitWidth();
+    if (isPowerOf2_32(Size))
+      return std::max(1U, Size / MinBitWidth);
+  }
+  return 1U;
+}
+
+static uint32_t getMaxScale(Function &F, const DataLayout &DL) {
+  uint32_t MaxScale = 32U;
+  if (!AutoScale)
+    return 1U;
+
+  auto Update = [&](uint32_t Count) { MaxScale = std::min(MaxScale, Count); };
+  Update(getMaxScale(F.getReturnType(), DL));
+  for (Value &Arg : F.args())
+    Update(getMaxScale(Arg.getType(), DL));
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB) {
+      if (I.isTerminator())
+        continue;
+      using namespace PatternMatch;
+      if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
+        Intrinsic::ID IID = II->getIntrinsicID();
+        switch (IID) {
+        case Intrinsic::bswap: {
+          uint32_t Size = I.getType()->getScalarSizeInBits();
+          if (Size == 32U)
+            Update(2);
+          else if (Size == 64U)
+            Update(4);
+          else
+            return 1U;
+          break;
+        }
+        case Intrinsic::smul_fix:
+        case Intrinsic::smul_fix_sat:
+        case Intrinsic::umul_fix:
+        case Intrinsic::umul_fix_sat:
+        case Intrinsic::sdiv_fix:
+        case Intrinsic::sdiv_fix_sat:
+        case Intrinsic::udiv_fix:
+        case Intrinsic::udiv_fix_sat:
+          return 1U;
+        default:
+          break;
+        }
+      }
+
+      Update(getMaxScale(I.getType(), DL));
+
+      bool UseSigned = true;
+      bool UseUnsigned = true;
+      ICmpInst::Predicate Pred;
+      if (match(&I, m_ICmp(Pred, m_Value(), m_Value()))) {
+        if (ICmpInst::isEquality(Pred))
+          UseSigned = UseUnsigned = false;
+        else if (ICmpInst::isSigned(Pred))
+          UseUnsigned = false;
+        else if (ICmpInst::isUnsigned(Pred))
+          UseSigned = false;
+      }
+      if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(&I)) {
+        if (OBO->hasNoUnsignedWrap())
+          UseUnsigned = false;
+        if (OBO->hasNoSignedWrap())
+          UseSigned = false;
+      }
+
+      for (auto &Op : I.operands()) {
+        if (isa<Function>(Op))
+          continue;
+        Update(getMaxScale(Op->getType(), DL));
+        const APInt *C;
+
+        if (match(static_cast<Value *>(Op), m_APInt(C))) {
+          uint32_t Bits = MinBitWidth;
+          if (UseSigned)
+            Bits = std::max(Bits, C->getSignificantBits());
+          if (UseUnsigned)
+            Bits = std::max(Bits, C->getActiveBits());
+          uint32_t CurrentBits = C->getBitWidth();
+          uint32_t Scale = 1U;
+          while (CurrentBits / 2 >= Bits) {
+            Scale *= 2;
+            CurrentBits /= 2;
+          }
+          Update(Scale);
+        }
+      }
+    }
+  return MaxScale;
+}
+
+static Type *getVectorType(Type *Ty, uint32_t Count, uint32_t Scale) {
   if (Ty->isVoidTy())
     return Ty;
   if (auto *FnTy = dyn_cast<FunctionType>(Ty)) {
-    auto RetTy = getVectorType(FnTy->getReturnType(), Count);
+    auto RetTy = getVectorType(FnTy->getReturnType(), Count, Scale);
     SmallVector<Type *, 4> ParamTy;
     for (auto *Param : FnTy->params())
-      ParamTy.push_back(getVectorType(Param, Count));
+      ParamTy.push_back(getVectorType(Param, Count, Scale));
     return FunctionType::get(RetTy, ParamTy, FnTy->isVarArg());
+  }
+  if (Scale != 1U && Ty->isIntegerTy() && !Ty->isIntegerTy(1)) {
+    uint32_t OldBitWidth = Ty->getIntegerBitWidth();
+    assert(OldBitWidth % Scale == 0);
+    Ty = cast<IntegerType>(Ty)->getWithNewBitWidth(OldBitWidth / Scale);
   }
   return FixedVectorType::get(Ty, Count);
 }
@@ -127,7 +239,12 @@ private:
   SmallDenseMap<Value *, Value *> ValueMap;
   SmallDenseMap<BasicBlock *, BasicBlock *> BBMap;
   uint32_t ElementCount;
+  uint32_t BitWidthScale;
   bool Mixed = false;
+
+  Type *getVectorType(Type *Ty) {
+    return ::getVectorType(Ty, ElementCount, BitWidthScale);
+  }
 
   Value *getMappedValue(Value *V) {
     if (auto *C = dyn_cast<Constant>(V)) {
@@ -138,8 +255,13 @@ private:
         else
           Elts.push_back(C);
       }
+      Constant *Res = ConstantVector::get(Elts);
+      if (C->getType()->isIntegerTy() && !C->getType()->isIntegerTy(1)) {
+        Res = ConstantExpr::getTrunc(Res, getVectorType(C->getType()));
+        assert(Res);
+      }
       Mixed = true;
-      return ConstantVector::get(Elts);
+      return Res;
       // return ConstantVector::getSplat(ElementCount::getFixed(ElementCount),
       // C);
     }
@@ -147,7 +269,7 @@ private:
     if (!Mapped) {
       // errs() << "Invalid value " << *V << '\n';
       // std::abort();
-      return PoisonValue::get(getVectorType(V->getType(), ElementCount));
+      return PoisonValue::get(getVectorType(V->getType()));
     }
     return Mapped;
   }
@@ -155,8 +277,9 @@ private:
   Value *getReducedValue(Value *V) { return Builder.CreateAndReduce(V); }
 
 public:
-  explicit Vectorizer(Module &M, uint32_t Count)
-      : Mod{M}, Builder{M.getContext()}, ElementCount{Count} {}
+  explicit Vectorizer(Module &M, uint32_t Count, uint32_t Scale)
+      : Mod{M}, Builder{M.getContext()}, ElementCount{Count},
+        BitWidthScale{Scale} {}
 
   Value *visitUnaryOperator(UnaryInstruction &I) {
     return Builder.CreateUnOp(static_cast<Instruction::UnaryOps>(I.getOpcode()),
@@ -168,8 +291,7 @@ public:
   }
   Value *visitCastInst(CastInst &I) {
     return Builder.CreateCast(I.getOpcode(), getMappedValue(I.getOperand(0)),
-                              getVectorType(I.getDestTy(), ElementCount),
-                              I.getName());
+                              getVectorType(I.getDestTy()), I.getName());
   }
   Value *visitCmpInst(CmpInst &I) {
     return Builder.CreateCmp(I.getPredicate(), getMappedValue(I.getOperand(0)),
@@ -240,8 +362,8 @@ public:
     case Intrinsic::fptoui_sat: {
       Value *Src = getMappedValue(I.getArgOperand(0));
       return Builder.CreateIntrinsic(
-          IID, {getVectorType(I.getType(), ElementCount), Src->getType()},
-          {Src}, isa<FPMathOperator>(I) ? &I : nullptr, I.getName());
+          IID, {getVectorType(I.getType()), Src->getType()}, {Src},
+          isa<FPMathOperator>(I) ? &I : nullptr, I.getName());
     }
     default: {
       if (IID > Intrinsic::xray_typedevent)
@@ -272,7 +394,7 @@ public:
     return Builder.CreateRetVoid();
   }
   Value *visitLoadInst(LoadInst &I) {
-    return Builder.CreateLoad(getVectorType(I.getType(), ElementCount),
+    return Builder.CreateLoad(getVectorType(I.getType()),
                               getMappedValue(I.getPointerOperand()),
                               I.isVolatile(), I.getName());
   }
@@ -321,9 +443,8 @@ public:
       BBMap.insert({&BB, &NewBB});
       Builder.SetInsertPoint(&NewBB);
       for (auto &PHI : BB.phis()) {
-        PHINode *NewPHI =
-            Builder.CreatePHI(getVectorType(PHI.getType(), ElementCount),
-                              PHI.getNumIncomingValues());
+        PHINode *NewPHI = Builder.CreatePHI(getVectorType(PHI.getType()),
+                                            PHI.getNumIncomingValues());
         ValueMap.insert({&PHI, NewPHI});
       }
     }
@@ -383,21 +504,27 @@ int main(int argc, char **argv) {
       uint32_t MaxElementCount = getMaxElementCount(F, M->getDataLayout());
       if (MaxElementCount < 2U)
         continue;
+      uint32_t Scale = getMaxScale(F, M->getDataLayout());
       auto NewF = cast<Function>(
-          NewM.getOrInsertFunction(F.getName(),
-                                   cast<FunctionType>(getVectorType(
-                                       F.getFunctionType(), MaxElementCount)))
+          NewM.getOrInsertFunction(
+                  F.getName(),
+                  cast<FunctionType>(getVectorType(F.getFunctionType(),
+                                                   MaxElementCount, Scale)))
               .getCallee());
-      Vectorizer Builder{NewM, MaxElementCount};
+      Vectorizer Builder{NewM, MaxElementCount, Scale};
       if (!Builder.run(F, *NewF)) {
         NewF->eraseFromParent();
         continue;
       }
       F.removeRetAttr(Attribute::ZExt);
       F.removeRetAttr(Attribute::SExt);
+      if (Scale != 1U)
+        F.removeRetAttr(Attribute::Range);
       for (uint32_t I = 0; I != F.arg_size(); ++I) {
         F.removeParamAttr(I, Attribute::ZExt);
         F.removeParamAttr(I, Attribute::SExt);
+        if (Scale != 1U)
+          F.removeParamAttr(I, Attribute::Range);
       }
       F.clearMetadata();
       F.setPersonalityFn(nullptr);
