@@ -18,7 +18,7 @@ include(AddLLVM)
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(pcg-cpp/include)
-set(LLVM_LINK_COMPONENTS core support irreader irprinter)
+set(LLVM_LINK_COMPONENTS core support irreader irprinter analysis instcombine passes)
 add_llvm_executable(strcmp PARTIAL_SOURCES_INTENDED strcmp.cpp)
 add_llvm_executable(vectorizer PARTIAL_SOURCES_INTENDED vectorizer.cpp)
 add_llvm_executable(instcombine-gen PARTIAL_SOURCES_INTENDED instcombine-gen.cpp)

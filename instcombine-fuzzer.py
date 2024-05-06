@@ -27,12 +27,21 @@ def fuzz(idx):
         if '0 incorrect transformations' in ret.decode('utf-8'):
             os.remove(src)
             os.remove(tgt)
+            return True
     except Exception as e:
         pass
+
+    return False
 
 pool = Pool(processes=threads)
 tasks = range(test_count)
 progress = tqdm.tqdm(tasks)
-for test_file in pool.imap_unordered(fuzz, tasks):
+failed = 0
+for res in pool.imap_unordered(fuzz, tasks):
+    if not res:
+        failed += 1
     progress.update()
 progress.close()
+
+print(f'Failed: {failed}')
+exit(1 if failed != 0 else 0)
