@@ -58,7 +58,7 @@ using namespace llvm;
 constexpr uint32_t MinArgs = 1U;
 constexpr uint32_t MaxArgs = 3U;
 constexpr uint32_t MinInsts = 3U;
-constexpr uint32_t MaxInsts = 5U;
+constexpr uint32_t MaxInsts = 12U;
 constexpr uint32_t BatchSize = 1024U;
 
 class FuncGenerator final {
@@ -115,10 +115,11 @@ class FuncGenerator final {
   Value *selectInst() {
     switch (randomUInt(8)) {
     case 0: {
-      auto Val = selectVal();
-      if (isa<FreezeInst>(Val) || isa<Argument>(Val))
-        return nullptr;
-      return Builder.CreateFreeze(Val);
+      return nullptr;
+      // auto Val = selectVal();
+      // if (isa<FreezeInst>(Val) || isa<Argument>(Val))
+      //   return nullptr;
+      // return Builder.CreateFreeze(Val);
     }
     case 1: {
       if (auto *Val = selectVal(); Val->getType()->isIntegerTy()) {
@@ -182,8 +183,11 @@ class FuncGenerator final {
       if (isa<Constant>(Val))
         return nullptr;
       static constexpr Intrinsic::ID IntArith[] = {
-          Intrinsic::bswap, Intrinsic::ctpop,      Intrinsic::ctlz,
-          Intrinsic::cttz,  Intrinsic::bitreverse, Intrinsic::abs,
+          // Intrinsic::bswap, Intrinsic::bitreverse,
+          Intrinsic::ctpop,
+          Intrinsic::ctlz,
+          Intrinsic::cttz,
+          Intrinsic::abs,
       };
       Intrinsic::ID IID = IntArith[randomUInt(std::size(IntArith) - 1U)];
       if (IID == Intrinsic::bswap) {
@@ -208,24 +212,25 @@ class FuncGenerator final {
           Intrinsic::sadd_with_overflow, Intrinsic::ssub_with_overflow,
           Intrinsic::smul_with_overflow, Intrinsic::uadd_with_overflow,
           Intrinsic::usub_with_overflow, Intrinsic::umul_with_overflow,
-          Intrinsic::sadd_sat,           Intrinsic::ssub_sat,
-          Intrinsic::uadd_sat,           Intrinsic::usub_sat,
-          Intrinsic::sshl_sat,           Intrinsic::ushl_sat,
+          // Intrinsic::sadd_sat,           Intrinsic::ssub_sat,
+          // Intrinsic::uadd_sat,           Intrinsic::usub_sat,
+          // Intrinsic::sshl_sat,           Intrinsic::ushl_sat,
       };
       Intrinsic::ID IID = IntArith[randomUInt(std::size(IntArith) - 1U)];
       return Builder.CreateBinaryIntrinsic(IID, LHS, RHS);
     }
     case 6: {
-      auto *Ty = randomNonBoolType();
-      auto *X = selectTypedVal(Ty);
-      auto *Y = selectTypedVal(Ty);
-      auto *Z = selectTypedVal(Ty);
-      if (isa<Constant>(X) && isa<Constant>(Y) && isa<Constant>(Z))
-        return nullptr;
-      static constexpr Intrinsic::ID IntArith[] = {Intrinsic::fshl,
-                                                   Intrinsic::fshr};
-      Intrinsic::ID IID = IntArith[randomUInt(std::size(IntArith) - 1U)];
-      return Builder.CreateIntrinsic(IID, X->getType(), {X, Y, Z});
+      return nullptr;
+      // auto *Ty = randomNonBoolType();
+      // auto *X = selectTypedVal(Ty);
+      // auto *Y = selectTypedVal(Ty);
+      // auto *Z = selectTypedVal(Ty);
+      // if (isa<Constant>(X) && isa<Constant>(Y) && isa<Constant>(Z))
+      //   return nullptr;
+      // static constexpr Intrinsic::ID IntArith[] = {Intrinsic::fshl,
+      //                                              Intrinsic::fshr};
+      // Intrinsic::ID IID = IntArith[randomUInt(std::size(IntArith) - 1U)];
+      // return Builder.CreateIntrinsic(IID, X->getType(), {X, Y, Z});
     }
     case 7: {
       auto *Ty = randomType();

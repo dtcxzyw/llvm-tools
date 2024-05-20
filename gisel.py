@@ -8,7 +8,7 @@ dataset = sys.argv[2]
 flags = ['-O3', '-mtriple=riscv64', '-mattr=+m,+a,+f,+d,+c']
 
 def test_gen(file, gisel):
-    return subprocess.check_output([llc_exec, file] + flags + (['-global-isel'] if gisel else []))
+    return subprocess.check_output([llc_exec, file] + flags + (['-global-isel'] if gisel else []) + ['-o', '/dev/null'])
 
 def test(file):
     try:
