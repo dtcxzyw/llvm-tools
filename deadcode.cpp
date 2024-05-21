@@ -3,6 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
+#include <llvm-19/llvm/ADT/SmallPtrSet.h>
+#include <llvm-19/llvm/ADT/StringRef.h>
 #include <llvm-19/llvm/IR/GlobalValue.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
@@ -70,10 +72,40 @@ static cl::opt<std::string>
               cl::Required, cl::value_desc("output"),
               cl::cat(ExtractorCategory));
 
-static bool hasInterestingCall(BasicBlock &BB) {
+static bool isLikelyToBeDead(BasicBlock &BB) {
   for (auto &I : BB) {
     if (isa<UnreachableInst>(&I))
       return true;
+    if (auto *Call = dyn_cast<CallBase>(&I)) {
+      if (Call->doesNotReturn())
+        return true;
+      if (auto *F = Call->getCalledFunction()) {
+        auto Name = F->getName();
+        if (Name.contains_insensitive("panic"))
+          return true;
+        if (Name.contains_insensitive("err"))
+          return true;
+        if (Name.contains_insensitive("fatal"))
+          return true;
+        if (Name.contains_insensitive("fail"))
+          return true;
+        if (Name.contains_insensitive("terminate"))
+          return true;
+        if (Name.contains_insensitive("abort"))
+          return true;
+        if (Name.contains_insensitive("assert"))
+          return true;
+        if (Name.contains_insensitive("error"))
+          return true;
+        if (!F->isIntrinsic()) {
+          for (auto &Arg : Call->args()) {
+            StringRef S;
+            if (getConstantStringInfo(Arg, S))
+              return true;
+          }
+        }
+      }
+    }
   }
   return false;
 }
@@ -141,7 +173,7 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   DenseSet<Value *> Visited;
   DenseSet<Instruction *> NonTerminal;
   visit(Root, Visited, NonTerminal, /*Depth=*/0);
-  if (NonTerminal.empty())
+  if (NonTerminal.size() <= 1)
     return;
   DenseSet<Value *> Terminals;
 
@@ -264,32 +296,23 @@ static void visitFunc(Function &F, Module &NewM) {
   SimplifyQuery SQ{F.getParent()->getDataLayout(), nullptr, &DT, &AC};
   SQ.DC = &DC;
   ReversePostOrderTraversal<Function *> RPOT(&F);
+
+  DenseSet<BasicBlock *> InterestingBBs;
+  for (auto &BB : F)
+    if (isLikelyToBeDead(BB))
+      InterestingBBs.insert(&BB);
+
   for (auto *BB : RPOT) {
-    if (!hasInterestingCall(*BB))
-      continue;
-    auto *Node = DT.getNode(BB);
-    if (!Node)
-      continue;
-    Node = Node->getIDom();
-    if (!Node)
-      continue;
-    auto *DomBB = Node->getBlock();
-    auto *BI = dyn_cast<BranchInst>(DomBB->getTerminator());
+    auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
     if (!BI || BI->isUnconditional())
       continue;
-
     auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
-    BasicBlockEdge Edge0(BI->getParent(), BI->getSuccessor(0));
-    if (DT.dominates(Edge0, BB))
-      AddEdge(BI, /*IsCondTrue=*/true, Q);
-
-    BasicBlockEdge Edge1(BI->getParent(), BI->getSuccessor(1));
-    if (DT.dominates(Edge1, BB))
-      AddEdge(BI, /*IsCondTrue=*/false, Q);
-
-    if (auto *BI = dyn_cast<BranchInst>(BB->getTerminator()))
-      if (BI->isConditional())
-        DC.registerBranch(BI);
+    if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
+      if (InterestingBBs.count(BI->getSuccessor(0)))
+        AddEdge(BI, /*IsCondTrue=*/true, Q);
+      if (InterestingBBs.count(BI->getSuccessor(1)))
+        AddEdge(BI, /*IsCondTrue=*/false, Q);
+    }
   }
 }
 
