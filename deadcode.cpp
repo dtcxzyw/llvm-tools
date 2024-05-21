@@ -201,6 +201,14 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
           CalledFunction->getName(), CalledFunction->getFunctionType(),
           CalledFunction->getAttributes()));
     }
+    // Check external uses
+    if (I != Root)
+      for (auto *User : I->users())
+        if (auto *Inst = dyn_cast<Instruction>(User))
+          if (!NonTerminal.count(Inst)) {
+            NewI->setName("use");
+            break;
+          }
     NewI->insertInto(BB, BB->end());
     ValueMap[I] = NewI;
   }

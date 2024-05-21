@@ -18,7 +18,7 @@ for r,ds,fs in os.walk(path):
 
 def verify(test_file):
     try:
-        out = subprocess.check_output([alive_tv, '--smt-to=1000', '--disable-undef-input', test_file],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120.0).decode('utf-8')
+        out = subprocess.check_output([alive_tv, '--smt-to=1000', '--disable-undef-input', test_file],timeout=120.0).decode('utf-8')
         if out.find('Transformation seems to be correct!') != -1:
             return (test_file, True)
     except Exception:
