@@ -97,6 +97,10 @@ static bool isLikelyToBeDead(BasicBlock &BB) {
           return true;
         if (Name.contains_insensitive("error"))
           return true;
+        if (Name.contains_insensitive("throw"))
+          return true;
+        if (Name.contains_insensitive("exception"))
+          return true;
         if (!F->isIntrinsic()) {
           for (auto &Arg : Call->args()) {
             StringRef S;
