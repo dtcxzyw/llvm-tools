@@ -50,22 +50,11 @@ skip_list = [
     'd57553fa1982a765.ll',
     'b9ad2e36d71bf6db.ll',
     '063f380a596290f0.ll',
-    '4733fda29c9f38d0.ll', # Crash
+    'ef680758965461c8.ll', # G_CTPOP
     'fb5ef30e606d8f75.ll',
-    'c9a0dc66985781b7.ll',
-    'c3460b1031e32520.ll',
-    'f7a7ed20d7926486.ll',
-    '8f4ef79c4ac72c2d.ll',
-    '5b0b73287b05e115.ll',
-    '334be4bbccbc7e30.ll',
-    'b62c9d35b3cba33e.ll',
-    'eff0a39f7b60438f.ll',
     'dfbaa00f5779c29e.ll',
-    'dde7f81c9c9d6425.ll',
-    '422df1776def92fb.ll',
-    'ef680758965461c8.ll',
-    '5ec5559580903376.ll', # G_FREM
-    'df8eb60acc2def80.ll',
+    'dde7f81c9c9d6425.ll', # G_CTTZ
+    '8f4ef79c4ac72c2d.ll',
     '5669ad57bb09c1b6.ll', # G_FPEXT
     '925d24abe5b44ff6.ll', # s16 G_FCMP (olt)
 ]
