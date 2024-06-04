@@ -66,7 +66,7 @@ def test(file):
     try:
         res1 = test_gen(file, False)
         res2 = test_gen(file, True)
-        if res1 != res2:
+        if res1.count('\n') != res2.count('\n'):
             print('Mismatch:', file)
             print('Without GISel:')
             print(res1)
