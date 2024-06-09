@@ -11,6 +11,7 @@
 #include <llvm/IR/Analysis.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -282,6 +283,22 @@ public:
     for (auto &Arg : F->args()) {
       if (randomBool())
         Arg.addAttr(Attribute::NoUndef);
+
+      if (Arg.getType()->isIntegerTy() && !Arg.getType()->isIntegerTy(1)) {
+        if (randomBool()) {
+          auto BW = Arg.getType()->getScalarSizeInBits();
+
+          auto Min = APInt(BW, randomUInt((1U << BW) - 1));
+          auto Max = APInt(BW, randomUInt((1U << BW) - 1));
+          auto CR = ConstantRange::getNonEmpty(Min, Max);
+          if (CR.isSizeLargerThan(1) && !CR.isFullSet()) {
+            AttrBuilder AB(Ctx);
+            AB.addRangeAttr(CR);
+            Arg.addAttrs(AB);
+          }
+        }
+      }
+
       addValue(&Arg);
     }
     auto Entry = BasicBlock::Create(Ctx, "", F);
