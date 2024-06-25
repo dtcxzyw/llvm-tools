@@ -131,7 +131,8 @@ int main(int argc, char **argv) {
       }
       M->print(Out->os(), /*AAW=*/nullptr);
       Out->keep();
-      system(("sed -i \"1,2d\" " + Path.string()).c_str());
+      int unused = system(("sed -i \"1,2d\" " + Path.string()).c_str());
+      (void)unused;
     }
 
     errs() << "\rProgress: " << ++Count;
