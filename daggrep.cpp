@@ -3,8 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include "llvm/ADT/APFloat.h"
-#include <llvm-19/llvm/ADT/APInt.h>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Analysis/InstructionSimplify.h>
@@ -42,10 +42,16 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <vector>
 
 using namespace llvm;
@@ -61,7 +67,6 @@ static cl::opt<std::string> PatternFile(cl::Positional,
                                         cl::value_desc("inputfile"));
 
 constexpr uint32_t MaxCount = 20;
-constexpr uint32_t MaxPattern = 10;
 
 static bool isSupportedType(Type *Ty) {
   if (Ty->isIntegerTy())
@@ -127,10 +132,6 @@ static bool verifyPattern(Module &M) {
   auto *Terminator = BB.getTerminator();
   if (!isa<ReturnInst>(Terminator)) {
     errs() << "error: expected return instruction\n";
-    return false;
-  }
-  if (BB.size() >= MaxPattern) {
-    errs() << "error: too many instructions\n";
     return false;
   }
   auto *RetVal = cast<ReturnInst>(Terminator)->getReturnValue();
@@ -280,25 +281,51 @@ static bool matchInst(Instruction &I1, Instruction &I2,
     //   return false;
   }
 
-  // TODO: support commutative instructions
-  if (auto *II1 = dyn_cast<IntrinsicInst>(&I1)) {
-    auto *II2 = cast<IntrinsicInst>(&I2);
-    for (uint32_t I = 0; I < II1->arg_size() - Skip; ++I) {
-      if (!matchValue(II1->getArgOperand(I), II1->getArgOperand(1), Map))
-        return false;
+  if (I1.isCommutative()) {
+    Value *LHS1, *RHS1, *LHS2, *RHS2;
+    if (auto *II1 = dyn_cast<IntrinsicInst>(&I1)) {
+      auto *II2 = cast<IntrinsicInst>(&I2);
+      LHS1 = II1->getArgOperand(0);
+      RHS1 = II1->getArgOperand(1);
+      LHS2 = II2->getArgOperand(0);
+      RHS2 = II2->getArgOperand(1);
+    } else {
+      LHS1 = I1.getOperand(0);
+      RHS1 = I1.getOperand(1);
+      LHS2 = I2.getOperand(0);
+      RHS2 = I2.getOperand(1);
     }
+    if (LHS2 == RHS2)
+      return LHS1 == RHS1 && matchValue(LHS1, LHS2, Map);
+    if (!match(RHS2, m_ImmConstant())) {
+      auto MapCopy = Map;
+      if (matchValue(LHS1, LHS2, Map) && matchValue(RHS1, RHS2, Map))
+        return true;
+      Map = std::move(MapCopy);
+      if (matchValue(LHS1, RHS2, Map) && matchValue(RHS1, LHS2, Map))
+        return true;
+      return false;
+    } else
+      return matchValue(LHS1, LHS2, Map) && matchValue(RHS1, RHS2, Map);
   } else {
-    for (uint32_t I = 0; I < I1.getNumOperands(); ++I) {
-      if (!matchValue(I1.getOperand(I), I2.getOperand(I), Map))
-        return false;
+    if (auto *II1 = dyn_cast<IntrinsicInst>(&I1)) {
+      auto *II2 = cast<IntrinsicInst>(&I2);
+      for (uint32_t I = 0; I < II1->arg_size() - Skip; ++I) {
+        if (!matchValue(II1->getArgOperand(I), II1->getArgOperand(1), Map))
+          return false;
+      }
+    } else {
+      for (uint32_t I = 0; I < I1.getNumOperands(); ++I) {
+        if (!matchValue(I1.getOperand(I), I2.getOperand(I), Map))
+          return false;
+      }
     }
-  }
 
-  return true;
+    return true;
+  }
 }
 
-static bool matchPattern(Function &F, Function &Pattern,
-                         const function_ref<void()> &CB) {
+static bool matchPattern(Function &F, Function &Pattern, std::string &Out) {
   auto *Root = cast<Instruction>(Pattern.front().back().getOperand(0));
 
   for (auto &BB : F) {
@@ -306,11 +333,11 @@ static bool matchPattern(Function &F, Function &Pattern,
       DenseMap<Value *, Value *> ValueMap;
       ValueMap[Root] = &I;
       if (matchInst(I, *Root, ValueMap)) {
-        CB();
+        raw_string_ostream Stream(Out);
         for (auto &SrcI : *Root->getParent()) {
           auto *TgtI = ValueMap[&SrcI];
           if (TgtI)
-            errs() << SrcI << "  ->" << *TgtI << '\n';
+            Stream << SrcI << "  ->" << *TgtI << '\n';
         }
         return true;
       }
@@ -322,17 +349,73 @@ static bool matchPattern(Function &F, Function &Pattern,
   return false;
 }
 
-static bool matchPattern(Module &M, Module &Pattern,
-                         const function_ref<void()> &CB) {
+static bool matchPattern(Module &M, Module &Pattern, std::string &Out) {
   for (auto &F : M) {
     if (F.empty())
       continue;
 
-    if (matchPattern(F, *Pattern.begin(), CB))
+    if (matchPattern(F, *Pattern.begin(), Out))
       return true;
   }
   return false;
 }
+
+struct Shared final {
+  fs::path BaseDir;
+  std::mutex Lock;
+  std::condition_variable CV;
+  std::queue<std::string> Tasks;
+  std::atomic_uint32_t TaskCount{0};
+  std::atomic_uint32_t Count{0};
+};
+
+struct Worker final {
+  Shared &SharedData;
+  std::jthread Thread;
+
+  explicit Worker(Shared &SharedDataRef)
+      : SharedData(SharedDataRef),
+        Thread(std::jthread([this](std::stop_token StopToken) {
+          try {
+            LLVMContext Context;
+            SMDiagnostic Err;
+            auto Pattern = parseIRFile(PatternFile, Err, Context);
+            canonicalizePattern(*Pattern);
+
+            while (!StopToken.stop_requested()) {
+              std::unique_lock Guard(SharedData.Lock);
+              // SharedData.CV.wait(Guard);
+
+              if (SharedData.Tasks.empty())
+                continue;
+              auto Path = std::move(SharedData.Tasks.front());
+              //   errs() << Path << '\n';
+              SharedData.Tasks.pop();
+              Guard.unlock();
+
+              if (SharedData.Count < MaxCount) {
+                SMDiagnostic Err;
+                auto M = parseIRFile(Path, Err, Context);
+                if (M) {
+                  std::string Out;
+                  if (matchPattern(*M, *Pattern, Out)) {
+                    Guard.lock();
+                    outs() << fs::relative(fs::absolute(Path),
+                                           SharedData.BaseDir)
+                                  .string()
+                           << '\n';
+                    outs() << Out << '\n';
+                    ++SharedData.Count;
+                  }
+                }
+              }
+              SharedData.TaskCount--;
+            }
+          } catch (const std::exception &ex) {
+            errs() << ex.what() << '\n';
+          }
+        })) {}
+};
 
 int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
@@ -344,46 +427,61 @@ int main(int argc, char **argv) {
       "quickjs/optimized/quickjs.ll",
   };
 
-  LLVMContext Context;
+  {
+    LLVMContext Context;
 
-  SMDiagnostic Err;
-  auto Pattern = parseIRFile(PatternFile, Err, Context);
-  if (!Pattern || !verifyPattern(*Pattern))
-    return EXIT_FAILURE;
+    SMDiagnostic Err;
+    auto Pattern = parseIRFile(PatternFile, Err, Context);
+    if (!Pattern || !verifyPattern(*Pattern))
+      return EXIT_FAILURE;
 
-  if (!canonicalizePattern(*Pattern))
-    return EXIT_FAILURE;
+    if (!canonicalizePattern(*Pattern))
+      return EXIT_FAILURE;
+  }
 
   uint32_t Count = 0;
-  auto BaseDir = fs::absolute(std::string(InputDir));
+  uint32_t Threads = std::thread::hardware_concurrency();
+  Shared SharedData;
+  SharedData.BaseDir = fs::absolute(std::string(InputDir));
+  std::vector<std::unique_ptr<Worker>> Workers;
+  for (uint32_t I = 0; I < Threads; ++I)
+    Workers.push_back(std::make_unique<Worker>(SharedData));
+
   for (auto &Entry : fs::recursive_directory_iterator(std::string(InputDir))) {
-    if (Entry.is_regular_file()) {
-      auto &Path = Entry.path();
-      if (Path.extension() == ".ll" &&
-          Path.string().find("/optimized/") != std::string::npos) {
-        auto Str = Path.string();
-        bool Blocked = false;
-        for (auto &Pattern : BlockList)
-          if (Str.find(Pattern) != std::string::npos) {
-            Blocked = true;
-            break;
-          }
-        if (!Blocked) {
-          SMDiagnostic Err;
-          auto M = parseIRFile(Path.string(), Err, Context);
-          if (!M)
-            continue;
-          if (matchPattern(*M, *Pattern, [&] {
-                outs() << fs::relative(fs::absolute(Path), BaseDir).string()
-                       << '\n';
-              })) {
-            if (++Count >= MaxCount)
-              break;
-          }
-        }
+    if (!Entry.is_regular_file())
+      continue;
+    auto &Path = Entry.path();
+    if (Path.extension() != ".ll" ||
+        Path.string().find("/optimized/") == std::string::npos)
+      continue;
+    auto Str = Path.string();
+    bool Blocked = false;
+    for (auto &Pattern : BlockList)
+      if (Str.find(Pattern) != std::string::npos) {
+        Blocked = true;
+        break;
       }
+    if (Blocked)
+      continue;
+
+    {
+      std::unique_lock Guard(SharedData.Lock);
+      SharedData.TaskCount++;
+      SharedData.Tasks.push(Str);
     }
+    SharedData.CV.notify_one();
+
+    if (SharedData.Count >= MaxCount)
+      break;
   }
+
+  using namespace std::literals;
+  while (SharedData.TaskCount > 0 && SharedData.Count < MaxCount)
+    std::this_thread::sleep_for(100ms);
+
+  SharedData.CV.notify_all();
+  Workers.clear();
+  outs() << SharedData.Count << " Occurrences\n";
 
   return EXIT_SUCCESS;
 }
