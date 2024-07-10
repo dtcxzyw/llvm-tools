@@ -27,3 +27,4 @@ add_llvm_executable(upgrade-constexpr PARTIAL_SOURCES_INTENDED upgrade-constexpr
 add_llvm_executable(scan96625 PARTIAL_SOURCES_INTENDED scan96625.cpp)
 add_llvm_executable(daggrep PARTIAL_SOURCES_INTENDED daggrep.cpp)
 add_llvm_executable(normalizer PARTIAL_SOURCES_INTENDED normalizer.cpp)
+add_llvm_executable(lutscan PARTIAL_SOURCES_INTENDED lutscan.cpp)
