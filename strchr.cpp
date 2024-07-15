@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <unordered_map>
 
 using namespace llvm;
@@ -70,7 +71,12 @@ static uint32_t foldStrChr(CallInst *Call, LibFunc Func) {
       return 0;
   }
 
-  return N;
+  // return N;
+  std::set<char> Chars;
+  for (uint64_t I = 0; I < N; ++I)
+    Chars.insert(Str[I]);
+
+  return Chars.size();
 }
 
 int main(int argc, char **argv) {
