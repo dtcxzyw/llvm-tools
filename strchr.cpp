@@ -129,8 +129,7 @@ int main(int argc, char **argv) {
         for (auto &I : BB) {
           if (auto *Call = dyn_cast<CallInst>(&I)) {
             LibFunc Func;
-            if (TLI.getLibFunc(*Call, Func) &&
-                (Func == LibFunc_strchr || Func == LibFunc_memchr)) {
+            if (TLI.getLibFunc(*Call, Func) && (Func == LibFunc_memchr)) {
               if (auto Len = foldStrChr(Call, Func))
                 ++LenDist[Len];
             }
