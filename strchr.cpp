@@ -4,6 +4,8 @@
 // See the LICENSE file for more information.
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -47,6 +49,30 @@ static cl::opt<std::string>
     InputDir(cl::Positional, cl::desc("<directory for input LLVM IR files>"),
              cl::Required, cl::value_desc("inputdir"));
 
+static uint32_t foldStrChr(CallInst *Call, LibFunc Func) {
+  if (isa<Constant>(Call->getArgOperand(1)))
+    return 0;
+
+  StringRef Str;
+  Value *Base = Call->getArgOperand(0);
+  if (!getConstantStringInfo(Base, Str, /*TrimAtNul=*/Func == LibFunc_strchr))
+    return 0;
+
+  uint64_t N = Str.size();
+  if (Func == LibFunc_memchr) {
+    if (auto *ConstInt = dyn_cast<ConstantInt>(Call->getArgOperand(2))) {
+      uint64_t Val = ConstInt->getZExtValue();
+      // Ignore the case that n is larger than the size of string.
+      if (Val > N)
+        return 0;
+      N = Val;
+    } else
+      return 0;
+  }
+
+  return N;
+}
+
 int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
   cl::ParseCommandLineOptions(argc, argv, "scanner\n");
@@ -85,36 +111,22 @@ int main(int argc, char **argv) {
     auto M = parseIRFile(Path.string(), Err, Context);
     if (!M)
       continue;
+    TargetLibraryInfoImpl TLIImpl(Triple(M->getTargetTriple()));
 
     for (auto &F : *M) {
       if (F.empty())
         continue;
 
-      auto Handle = [&](Value *V) {
-        if (auto *Global = dyn_cast<GlobalVariable>(V)) {
-          if (!Global->hasInitializer())
-            return;
-          if (!Global->isConstant())
-            return;
-          auto *Initializer = Global->getInitializer();
-          if (auto *Arr = dyn_cast<ConstantDataArray>(Initializer)) {
-            errs() << *Arr << '\n';
-            if (Arr->getType()->getArrayElementType()->isIntegerTy(8))
-              LenDist[Arr->getType()->getArrayNumElements()]++;
-          }
-        }
-      };
+      TargetLibraryInfo TLI(TLIImpl, &F);
 
       for (auto &BB : F) {
         for (auto &I : BB) {
           if (auto *Call = dyn_cast<CallInst>(&I)) {
-            auto *Callee = Call->getCalledFunction();
-            if (!Callee)
-              continue;
-            auto FuncName = Callee->getName();
-            if (FuncName == "strchr" || FuncName == "memchr") {
-              auto *Op1 = Call->getArgOperand(0);
-              Handle(Op1);
+            LibFunc Func;
+            if (TLI.getLibFunc(*Call, Func) &&
+                (Func == LibFunc_strchr || Func == LibFunc_memchr)) {
+              if (auto Len = foldStrChr(Call, Func))
+                ++LenDist[Len];
             }
           }
         }
