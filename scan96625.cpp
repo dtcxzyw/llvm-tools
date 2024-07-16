@@ -88,11 +88,10 @@ getIVIncrement(const PHINode *PN, const LoopInfo *LI) {
   return std::nullopt;
 }
 
-static bool isRemOfLoopIncrementWithLIV(Value *Rem, const LoopInfo *LI,
-                                        Value *&RemAmtOut,
-                                        std::optional<bool> &AddOrSubOut,
-                                        Value *&AddOrSubOffsetOut,
-                                        PHINode *&LoopIncrPNOut) {
+static bool isRemOfLoopIncrementWithLoopInvariant(
+    Value *Rem, const LoopInfo *LI, Value *&RemAmtOut,
+    std::optional<bool> &AddOrSubOut, Value *&AddOrSubOffsetOut,
+    PHINode *&LoopIncrPNOut) {
   Value *Incr, *RemAmt;
   if (!isa<Instruction>(Rem))
     return false;
@@ -159,12 +158,41 @@ static bool isRemOfLoopIncrementWithLIV(Value *Rem, const LoopInfo *LI,
   if (!match(LoopIncrInfo->first, m_NUWAdd(m_Value(), m_Value())))
     return false;
 
+  if (PN->getBasicBlockIndex(L->getLoopLatch()) < 0 ||
+      PN->getBasicBlockIndex(L->getLoopPreheader()) < 0)
+    return false;
+
   // Set output variables.
   RemAmtOut = RemAmt;
   LoopIncrPNOut = PN;
   AddOrSubOut = AddOrSub;
   AddOrSubOffsetOut = AddOrSubOffset;
 
+  return true;
+}
+
+static bool foldURemOfLoopIncrement(Instruction *Rem, const LoopInfo *LI) {
+  std::optional<bool> AddOrSub;
+  Value *AddOrSubOffset, *RemAmt;
+  PHINode *LoopIncrPN;
+  if (!isRemOfLoopIncrementWithLoopInvariant(Rem, LI, RemAmt, AddOrSub,
+                                             AddOrSubOffset, LoopIncrPN))
+    return false;
+
+  // Only non-constant remainder as the extra IV is is probably not profitable
+  // in that case. Further, since remainder amount is non-constant, only handle
+  // case where `IncrLoopInvariant` and `Start` are 0 to entirely eliminate the
+  // rem (as opposed to just hoisting it outside of the loop).
+  //
+  // Potential TODO: Should we have a check for how "nested" this remainder
+  // operation is? The new code runs every iteration so if the remainder is
+  // guarded behind unlikely conditions this might not be worth it.
+  if (AddOrSub.has_value() || match(RemAmt, m_ImmConstant()))
+    return false;
+  Loop *L = LI->getLoopFor(Rem->getParent());
+  if (!match(LoopIncrPN->getIncomingValueForBlock(L->getLoopPreheader()),
+             m_Zero()))
+    return false;
   return true;
 }
 
@@ -229,18 +257,7 @@ int main(int argc, char **argv) {
           if (I.getOpcode() != Instruction::URem)
             continue;
 
-          std::optional<bool> AddOrSub;
-          Value *AddOrSubOffset, *RemAmt;
-          PHINode *LoopIncrPN;
-          if (isRemOfLoopIncrementWithLIV(&I, &LI, RemAmt, AddOrSub,
-                                          AddOrSubOffset, LoopIncrPN)) {
-            if (AddOrSub.has_value() || match(RemAmt, m_ImmConstant()))
-              continue;
-            // Loop *L = LI.getLoopFor(&BB);
-            // auto Preheader = L->getLoopPreheader();
-            // auto IV = LoopIncrPN->getIncomingValueForBlock(Preheader);
-            // if (!match(IV, m_Zero()))
-            //   continue;
+          if (foldURemOfLoopIncrement(&I, &LI)) {
             Contains = true;
             break;
           }
