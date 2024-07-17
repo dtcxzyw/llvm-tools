@@ -3,8 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include "llvm/IR/GlobalValue.h"
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -12,6 +12,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstVisitor.h>
@@ -61,38 +62,53 @@ static bool matchLoadLUT(LoadInst &LI) {
     return false;
 
   auto *GEP = dyn_cast<GetElementPtrInst>(LI.getPointerOperand());
-  if (!GEP || LI.getType() != GEP->getResultElementType())
+  if (!GEP)
     return false;
 
   auto *GV = dyn_cast<GlobalVariable>(GEP->getPointerOperand());
-  if (!GV || !GV->isConstant() || !GV->hasDefinitiveInitializer() ||
-      GV->getValueType() != GEP->getSourceElementType())
+  if (!GV || !GV->isConstant() || !GV->hasDefinitiveInitializer())
     return false;
 
   Constant *Init = GV->getInitializer();
-  if (!isa<ConstantArray>(Init) && !isa<ConstantDataArray>(Init))
+  auto &DL = LI.getDataLayout();
+
+  uint64_t IndexBW = DL.getIndexTypeSizeInBits(GEP->getType());
+  APInt ConstOffset(IndexBW, 0);
+  MapVector<Value *, APInt> VariableOffsets;
+  if (!GEP->collectOffset(DL, IndexBW, VariableOffsets, ConstOffset))
     return false;
 
-  uint64_t ArrayElementCount = Init->getType()->getArrayNumElements();
-
-  // Require: GEP GV, 0, i
-  if (GEP->getNumOperands() != 3 || !isa<ConstantInt>(GEP->getOperand(1)) ||
-      !cast<ConstantInt>(GEP->getOperand(1))->isZero() ||
-      isa<Constant>(GEP->getOperand(2)))
+  if (!ConstOffset.isZero() || VariableOffsets.size() != 1)
     return false;
 
-  auto &CostCounter = Cost[ArrayElementCount];
+  auto &Step = VariableOffsets.front().second;
+  if (Step.isNonPositive())
+    return false;
+  uint64_t ArraySize = DL.getTypeAllocSize(Init->getType()).getFixedValue();
 
+  Value *Index = VariableOffsets.front().first;
+  if (Index->getType()->getScalarSizeInBits() != IndexBW)
+    return false;
+  auto &CostCounter = Cost[ArraySize];
+
+  Type *LoadTy = LI.getType();
   SmallMapVector<Constant *, uint64_t, 2> ValueMap;
+  // MultiMapIdx indicates that this value occurs more than once in the array.
   constexpr uint64_t MultiMapIdx = static_cast<uint64_t>(-1);
   uint32_t MultiMapElts = 0;
-  for (uint64_t I = 0; I < ArrayElementCount; ++I) {
-    Constant *Elt = Init->getAggregateElement(I);
-    if (!Elt)
-      std::abort();
+  APInt Offset(IndexBW, 0);
+  for (uint64_t I = 0; Offset.getZExtValue() < ArraySize; ++I, Offset += Step) {
     ++CostCounter;
+    Constant *Elt = ConstantFoldLoadFromConst(Init, LoadTy, Offset, DL);
 
-    if (auto *It = ValueMap.find(Elt); It != ValueMap.end()) {
+    if (!Elt)
+      return false;
+
+    // bail out if the array contains undef values
+    if (isa<UndefValue>(Elt))
+      return false;
+
+    if (auto It = ValueMap.find(Elt); It != ValueMap.end()) {
       if (It->second == MultiMapIdx)
         continue;
       if (++MultiMapElts == 2)
@@ -108,7 +124,7 @@ static bool matchLoadLUT(LoadInst &LI) {
   if (ValueMap.size() != 1 && ValueMap.size() != 2)
     std::abort();
 
-  ++Distrib[ArrayElementCount];
+  Distrib[ArraySize]++;
 
   //   LI.print(errs() << "\nLoad: ");
   //   GEP->print(errs() << "\nGEP: ");
@@ -160,28 +176,24 @@ int main(int argc, char **argv) {
     // auto &DL = M->getDataLayout();
     // errs() << DL.getStringRepresentation() << '\n';
 
+    bool Contains = false;
     for (auto &F : *M) {
       if (F.empty())
         continue;
-
-      bool Contains = false;
 
       for (auto &BB : F) {
         for (auto &I : BB) {
           if (auto *Load = dyn_cast<LoadInst>(&I)) {
             if (matchLoadLUT(*Load)) {
               Contains = true;
-              break;
             }
           }
         }
-        if (Contains)
-          break;
       }
+    }
 
-      if (Contains) {
-        Names.insert(fs::relative(fs::absolute(Path), BaseDir));
-      }
+    if (Contains) {
+      Names.insert(fs::relative(fs::absolute(Path), BaseDir));
     }
 
     errs() << "\rProgress: " << ++Count;
@@ -198,6 +210,7 @@ int main(int argc, char **argv) {
   uint32_t CostAcc = 0;
   uint32_t FoldAcc = 0;
 
+  errs() << "Thres(Byte) ScanCount FoldCount\n";
   for (uint32_t Thres = 0; Thres < 100; ++Thres) {
     CostAcc += Cost[Thres];
     FoldAcc += Distrib[Thres];
