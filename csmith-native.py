@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Pool
 from tqdm import tqdm
 import os
 import sys
@@ -12,7 +12,7 @@ import datetime
 csmith_dir = "/home/dtcxzyw/WorkSpace/Projects/compilers/csmith/install/"
 test_count = int(sys.argv[1])
 csmith_ext = ""
-csmith_command = csmith_dir +"/bin/csmith --max-funcs 3 --max-block-depth 5 --quiet --builtins --no-packed-struct --no-unions --no-bitfields --no-volatiles --no-volatile-pointers {}--output ".format(
+csmith_command = csmith_dir +"/bin/csmith --max-funcs 3 --max-block-depth 5 --quiet --builtins --no-packed-struct --no-unions --no-bitfields {}--output ".format(
     csmith_ext)
 common_opts = "-Wno-narrowing -DNDEBUG -g0 -ffp-contract=on -w -I" + csmith_dir + "/include "
 gcc_command = "clang -O0 " + common_opts
@@ -92,17 +92,18 @@ L = list(range(test_count))
 pbar = tqdm.tqdm(L)
 error_count = 0
 skipped_count = 0
+pool = Pool(16)
 
-with ThreadPoolExecutor(max_workers=16) as p:
-    for res in p.map(csmith_test, L):
-        if res is not None:
-            error_count += 0 if res else 1
-        else:
-            skipped_count += 1
+for res in pool.imap_unordered(csmith_test, L):
+    if res is not None:
+        error_count += 0 if res else 1
+    else:
+        skipped_count += 1
 
-        pbar.update(1)
-        pbar.set_description("Failed: {} Skipped: {}".format(
-            error_count, skipped_count))
+    pbar.set_description("Failed: {} Skipped: {}".format(
+        error_count, skipped_count), refresh=False)
+    pbar.update(1)
+pbar.close()
 
 if error_count == 0:
     shutil.rmtree(cwd)
