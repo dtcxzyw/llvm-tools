@@ -3,14 +3,14 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include <llvm-19/llvm/ADT/SmallPtrSet.h>
-#include <llvm-19/llvm/ADT/StringRef.h>
-#include <llvm-19/llvm/IR/GlobalValue.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/AssumptionCache.h>
 #include <llvm/Analysis/DomConditionCache.h>
 #include <llvm/Analysis/SimplifyQuery.h>
@@ -23,6 +23,7 @@
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instruction.h>
@@ -32,12 +33,17 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/PatternMatch.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IRPrinter/IRPrintingPasses.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/Pass.h>
+#include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -136,6 +142,24 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
       case Intrinsic::bitreverse:
       case Intrinsic::fshl:
       case Intrinsic::fshr:
+      case Intrinsic::smax:
+      case Intrinsic::smin:
+      case Intrinsic::umax:
+      case Intrinsic::umin:
+      case Intrinsic::sadd_sat:
+      case Intrinsic::uadd_sat:
+      case Intrinsic::ssub_sat:
+      case Intrinsic::usub_sat:
+      case Intrinsic::sshl_sat:
+      case Intrinsic::ushl_sat:
+      case Intrinsic::scmp:
+      case Intrinsic::ucmp:
+      case Intrinsic::sadd_with_overflow:
+      case Intrinsic::uadd_with_overflow:
+      case Intrinsic::ssub_with_overflow:
+      case Intrinsic::usub_with_overflow:
+      case Intrinsic::smul_with_overflow:
+      case Intrinsic::umul_with_overflow:
         break;
       default:
         return;
@@ -160,6 +184,7 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
   case Instruction::LShr:
   case Instruction::AShr:
   case Instruction::ICmp:
+  case Instruction::ExtractElement:
     break;
   default:
     return;
@@ -226,6 +251,7 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
       F->addParamAttr(ArgIdx, Attribute::NoUndef);
     if (Val->getType()->isPtrOrPtrVectorTy() && isKnownNonZero(Val, Q))
       F->addParamAttr(ArgIdx, Attribute::NonNull);
+    // TODO: range/knownbits
     ArgIdx++;
   }
   while (!Queue.empty()) {
@@ -307,22 +333,81 @@ static void visitFunc(Function &F, Module &NewM) {
       InterestingBBs.insert(&BB);
 
   for (auto *BB : RPOT) {
+    for (auto &I : make_early_inc_range(*BB)) {
+      if (auto *II = dyn_cast<MinMaxIntrinsic>(&I)) {
+        if (II->getType()->isVectorTy())
+          continue;
+        auto Pred = ICmpInst::getNonStrictPredicate(II->getPredicate());
+        auto *Cmp = ICmpInst::Create(Instruction::ICmp, Pred, II->getOperand(0),
+                                     II->getOperand(1), "", II);
+        auto Q = SQ.getWithInstruction(Cmp);
+        extractCond(Cmp, true, NewM, Q);
+        Cmp->setPredicate(ICmpInst::getSwappedPredicate(Pred));
+        extractCond(Cmp, true, NewM, Q);
+        Cmp->eraseFromParent();
+      }
+    }
+
     auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
     if (!BI || BI->isUnconditional())
       continue;
-    auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
-    if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
-      if (InterestingBBs.count(BI->getSuccessor(0)))
-        AddEdge(BI, /*IsCondTrue=*/true, Q);
-      if (InterestingBBs.count(BI->getSuccessor(1)))
-        AddEdge(BI, /*IsCondTrue=*/false, Q);
+    DC.registerBranch(BI);
+    // auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
+    // if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
+    //   if (InterestingBBs.count(BI->getSuccessor(0)))
+    //     AddEdge(BI, /*IsCondTrue=*/true, Q);
+    //   if (InterestingBBs.count(BI->getSuccessor(1)))
+    //     AddEdge(BI, /*IsCondTrue=*/false, Q);
+    // }
+  }
+}
+
+static void cleanup(Module &M) {
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+
+  PassBuilder PB;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  ModulePassManager MPM = PB.buildModuleSimplificationPipeline(
+      OptimizationLevel::O3, ThinOrFullLTOPhase::None);
+
+  MPM.run(M, MAM);
+
+  std::vector<std::string> DeadFuncs;
+  for (auto &F : M) {
+    if (F.empty())
+      continue;
+    if (F.getName().starts_with("src")) {
+      auto *RetValue =
+          cast<ReturnInst>(F.getEntryBlock().getTerminator())->getReturnValue();
+      if (isa<Constant>(RetValue) || F.getEntryBlock().size() > 5)
+        DeadFuncs.push_back(F.getName().str());
     }
+  }
+
+  for (auto &Name : DeadFuncs) {
+    auto *F = M.getFunction(Name);
+    F->eraseFromParent();
+    auto *TgtF = M.getFunction("tgt" + Name.substr(3));
+    TgtF->eraseFromParent();
   }
 }
 
 int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
   cl::ParseCommandLineOptions(argc, argv, "potential dead code extractor\n");
+  std::vector<std::string> BlockList{
+      "ruby/optimized/vm.ll",
+      "/regexec.ll",
+      "quickjs/optimized/quickjs.ll",
+  };
 
   std::vector<fs::path> InputFiles;
   for (auto &Entry : fs::recursive_directory_iterator(std::string(InputDir))) {
@@ -330,8 +415,16 @@ int main(int argc, char **argv) {
       auto &Path = Entry.path();
       if (Path.string().find("/optimized/") == std::string::npos)
         continue;
-      if (Path.extension() == ".ll")
-        InputFiles.push_back(Path);
+      if (Path.extension() == ".ll") {
+        bool Blocked = false;
+        for (auto &Pattern : BlockList)
+          if (Path.string().find(Pattern) != std::string::npos) {
+            Blocked = true;
+            break;
+          }
+        if (!Blocked)
+          InputFiles.push_back(Path);
+      }
     }
   }
   errs() << "Input files: " << InputFiles.size() << '\n';
@@ -358,6 +451,7 @@ int main(int argc, char **argv) {
         continue;
       visitFunc(F, NewM);
     }
+    cleanup(NewM);
 
     bool Valid = false;
     for (auto &F : NewM) {

@@ -21,6 +21,8 @@ def verify(test_file):
         out = subprocess.check_output([alive_tv, '--smt-to=1000', '--disable-undef-input', test_file],timeout=120.0).decode('utf-8')
         if out.find('Transformation seems to be correct!') != -1:
             return (test_file, True)
+    except subprocess.CalledProcessError as e:
+        return (test_file, None)
     except Exception:
         pass
     return (test_file, False)
@@ -30,6 +32,8 @@ pool = Pool(processes=threads)
 with open('alive2.log', 'w') as f:
     progress = tqdm.tqdm(work_list)
     for test_file, res in pool.imap_unordered(verify, work_list):
+        if res is None:
+            f.write(f'ERROR: {test_file}\n')
         if res:
             f.write(f'PASS: {test_file}\n')
         progress.update()
