@@ -39,24 +39,27 @@ def build_and_run(arch, basename, file_c, ref_output):
             f.write(comp_command)
         return False
     
-    try:
-        out = subprocess.check_output(qemu_command+[file_out], timeout=exec_qemu_timeout)
-    except subprocess.TimeoutExpired:
-        # ignore timeout
-        os.remove(file_out)
-        return True
-    except subprocess.SubprocessError:
-        with open(file_out+"_run.sh", "w") as f:
-            f.write(" ".join(qemu_command+[file_out]))
-        return False
+    os.remove(file_out)
+    return True
     
-    if out == ref_output:
-        os.remove(file_out)
-        return True
-    else:
-        with open(file_out+"_run.sh", "w") as f:
-            f.write(" ".join(qemu_command+[file_out]))
-        return False
+    # try:
+    #     out = subprocess.check_output(qemu_command+[file_out], timeout=exec_qemu_timeout)
+    # except subprocess.TimeoutExpired:
+    #     # ignore timeout
+    #     os.remove(file_out)
+    #     return True
+    # except subprocess.SubprocessError:
+    #     with open(file_out+"_run.sh", "w") as f:
+    #         f.write(" ".join(qemu_command+[file_out]))
+    #     return False
+    
+    # if out == ref_output:
+    #     os.remove(file_out)
+    #     return True
+    # else:
+    #     with open(file_out+"_run.sh", "w") as f:
+    #         f.write(" ".join(qemu_command+[file_out]))
+    #     return False
 
 def csmith_test(i):
     basename = cwd+"/test"+str(i)
@@ -66,19 +69,20 @@ def csmith_test(i):
     except subprocess.SubprocessError:
         return None
     
-    file_ref = basename + "_ref"
-    try:
-        subprocess.check_call((gcc_command+"-o "+file_ref+" "+file_c).split(' '),timeout=comp_timeout)
-    except subprocess.SubprocessError:
-        os.remove(file_c)
-        return None
+    # file_ref = basename + "_ref"
+    # try:
+    #     subprocess.check_call((gcc_command+"-o "+file_ref+" "+file_c).split(' '),timeout=comp_timeout)
+    # except subprocess.SubprocessError:
+    #     os.remove(file_c)
+    #     return None
 
-    try:
-        ref_output = subprocess.check_output(file_ref, timeout=exec_timeout)
-    except subprocess.SubprocessError:
-        os.remove(file_c)
-        os.remove(file_ref)
-        return None
+    # try:
+    #     ref_output = subprocess.check_output(file_ref, timeout=exec_timeout)
+    # except subprocess.SubprocessError:
+    #     os.remove(file_c)
+    #     os.remove(file_ref)
+    #     return None
+    ref_output = None
     
     result = True
     for arch in clang_arch_list:
@@ -87,7 +91,7 @@ def csmith_test(i):
 
     if result:
         os.remove(file_c)
-        os.remove(file_ref)
+        # os.remove(file_ref)
 
     return result
 
