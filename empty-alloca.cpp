@@ -4,7 +4,7 @@
 // See the LICENSE file for more information.
 
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -34,7 +34,6 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/TargetParser/Triple.h>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -80,43 +79,58 @@ int main(int argc, char **argv) {
   errs() << "Input files: " << InputFiles.size() << '\n';
   LLVMContext Context;
   uint32_t Count = 0;
-  StringMap<uint32_t> CallDist;
+  uint32_t FindCount = 0;
 
   for (auto &Path : InputFiles) {
     SMDiagnostic Err;
     auto M = parseIRFile(Path.string(), Err, Context);
     if (!M)
       continue;
-
-    TargetLibraryInfoImpl TLIImpl(Triple(M->getTargetTriple()));
-
+    auto &DL = M->getDataLayout();
+    bool Found = false;
     for (auto &F : *M) {
       if (F.empty())
         continue;
-      TargetLibraryInfo TLI(TLIImpl, &F);
 
-      for (auto &BB : F) {
-        for (auto &I : BB) {
-          if (auto *Call = dyn_cast<CallInst>(&I)) {
-            auto *Callee = Call->getCalledFunction();
-            if (!Callee)
-              continue;
+      for (auto &I : F.getEntryBlock()) {
+        if (auto *AI = dyn_cast<AllocaInst>(&I)) {
+          if (auto Size = AI->getAllocationSizeInBits(DL);
+              Size.value_or(TypeSize::getFixed(1)) != 0)
+            continue;
 
-            LibFunc LibCall;
-            if (TLI.getLibFunc(*Call, LibCall)) {
-              CallDist[Callee->getName()]++;
+          bool UsedByOther = false;
+          for (auto U : AI->users()) {
+            if (auto *CB = dyn_cast<CallBase>(U)) {
+              if (CB->getCalledFunction() &&
+                  CB->getCalledFunction()->hasInternalLinkage()) {
+                errs() << "Found alloca: " << *AI << ' '
+                       << CB->getCalledFunction()->getName() << ' '
+                       << Path.string() << '\n';
+                UsedByOther = true;
+                break;
+              }
             }
           }
-        }
+          if (!UsedByOther)
+            continue;
+          Found = true;
+          break;
+        } else
+          break;
+      }
+
+      if (Found) {
+        ++FindCount;
+        break;
       }
     }
+
+    if (FindCount >= 20)
+      break;
 
     errs() << "\rProgress: " << ++Count;
   }
   errs() << '\n';
-
-  for (auto &K : CallDist)
-    errs() << K.first() << ' ' << K.second << '\n';
 
   return EXIT_SUCCESS;
 }

@@ -16,7 +16,7 @@ csmith_command = csmith_dir +"/bin/csmith --max-funcs 3 --max-block-depth 5 --qu
     csmith_ext)
 common_opts = "-Wno-narrowing -DNDEBUG -g0 -ffp-contract=on -w -I" + csmith_dir + "/include "
 gcc_command = "clang -O0 " + common_opts
-clang_command = "/home/dtcxzyw/WorkSpace/Projects/compilers/LLVM/llvm-build/bin/clang -O3 " + common_opts
+clang_command = "/home/dtcxzyw/WorkSpace/Projects/compilers/LLVM/llvm-build/bin/clang -O3 -mllvm -inline-threshold=100000 " + common_opts
 exec_timeout = 6.0
 exec_qemu_timeout = 10.0
 comp_timeout = 30.0

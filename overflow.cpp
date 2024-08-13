@@ -4,7 +4,7 @@
 // See the LICENSE file for more information.
 
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -15,10 +15,12 @@
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
+#include <llvm/IR/PatternMatch.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Verifier.h>
@@ -34,7 +36,6 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/TargetParser/Triple.h>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -43,6 +44,7 @@
 #include <unordered_map>
 
 using namespace llvm;
+using namespace PatternMatch;
 namespace fs = std::filesystem;
 
 static cl::opt<std::string>
@@ -80,43 +82,61 @@ int main(int argc, char **argv) {
   errs() << "Input files: " << InputFiles.size() << '\n';
   LLVMContext Context;
   uint32_t Count = 0;
-  StringMap<uint32_t> CallDist;
+  uint32_t FindCount = 0;
 
   for (auto &Path : InputFiles) {
     SMDiagnostic Err;
     auto M = parseIRFile(Path.string(), Err, Context);
     if (!M)
       continue;
-
-    TargetLibraryInfoImpl TLIImpl(Triple(M->getTargetTriple()));
-
+    auto &DL = M->getDataLayout();
+    bool Found = false;
     for (auto &F : *M) {
       if (F.empty())
         continue;
-      TargetLibraryInfo TLI(TLIImpl, &F);
 
       for (auto &BB : F) {
         for (auto &I : BB) {
-          if (auto *Call = dyn_cast<CallInst>(&I)) {
-            auto *Callee = Call->getCalledFunction();
-            if (!Callee)
+          if (auto *WO = dyn_cast<WithOverflowInst>(&I)) {
+            if (!isa<Constant>(I.getOperand(0)) &&
+                !isa<Constant>(I.getOperand(1)))
+              continue;
+            bool Match0 = false;
+            bool Match1 = false;
+            bool Match2 = false;
+            for (auto U : WO->users()) {
+              if (match(U, m_ExtractValue<0>(m_Specific(&I)))) {
+                Match0 = true;
+              } else if (match(U, m_ExtractValue<1>(m_Specific(&I)))) {
+                Match1 = true;
+              } else
+                Match2 = true;
+            }
+            if (Match2)
               continue;
 
-            LibFunc LibCall;
-            if (TLI.getLibFunc(*Call, LibCall)) {
-              CallDist[Callee->getName()]++;
+            if (Match0 != Match1) {
+              Found = true;
+              errs() << "Found: " << (Match0 ? 0 : 1) << ' ' << I << ' ' << Path
+                     << '\n';
+              break;
             }
           }
         }
       }
+
+      if (Found) {
+        ++FindCount;
+        break;
+      }
     }
+
+    if (FindCount >= 20)
+      break;
 
     errs() << "\rProgress: " << ++Count;
   }
   errs() << '\n';
-
-  for (auto &K : CallDist)
-    errs() << K.first() << ' ' << K.second << '\n';
 
   return EXIT_SUCCESS;
 }

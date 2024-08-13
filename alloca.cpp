@@ -3,8 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
@@ -34,7 +34,6 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/ToolOutputFile.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/TargetParser/Triple.h>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -80,43 +79,86 @@ int main(int argc, char **argv) {
   errs() << "Input files: " << InputFiles.size() << '\n';
   LLVMContext Context;
   uint32_t Count = 0;
-  StringMap<uint32_t> CallDist;
+  uint32_t FindCount = 0;
 
   for (auto &Path : InputFiles) {
     SMDiagnostic Err;
     auto M = parseIRFile(Path.string(), Err, Context);
     if (!M)
       continue;
-
-    TargetLibraryInfoImpl TLIImpl(Triple(M->getTargetTriple()));
-
+    auto &DL = M->getDataLayout();
+    bool Found = false;
     for (auto &F : *M) {
       if (F.empty())
         continue;
-      TargetLibraryInfo TLI(TLIImpl, &F);
 
-      for (auto &BB : F) {
-        for (auto &I : BB) {
-          if (auto *Call = dyn_cast<CallInst>(&I)) {
-            auto *Callee = Call->getCalledFunction();
-            if (!Callee)
+      for (auto &I : F.getEntryBlock()) {
+        if (auto *AI = dyn_cast<AllocaInst>(&I)) {
+          if (!AI->getAllocatedType()->isIntOrPtrTy() &&
+              !AI->getAllocatedType()->isFloatTy())
+            continue;
+          if (auto Size = AI->getAllocationSizeInBits(DL);
+              Size.value_or(TypeSize::getFixed(128)) > 64)
+            continue;
+
+          SmallVector<Instruction *, 16> WorkList;
+          WorkList.push_back(AI);
+          SmallPtrSet<Instruction *, 16> Visited;
+          bool UsedByOther = false;
+          while (!WorkList.empty()) {
+            auto *I = WorkList.pop_back_val();
+            if (!Visited.insert(I).second)
               continue;
+            for (auto *U : I->users()) {
+              if (auto *UI = dyn_cast<Instruction>(U)) {
+                if (isa<CallBase>(UI) || isa<PtrToIntInst>(UI) ||
+                    isa<PHINode>(UI) || isa<SelectInst>(UI)) {
+                  UsedByOther = true;
+                  break;
+                }
 
-            LibFunc LibCall;
-            if (TLI.getLibFunc(*Call, LibCall)) {
-              CallDist[Callee->getName()]++;
+                if (auto *LI = dyn_cast<LoadInst>(UI)) {
+                  if (!LI->isSimple() ||
+                      UI->getAccessType() != AI->getAllocatedType()) {
+                    UsedByOther = true;
+                    break;
+                  }
+                  continue;
+                }
+
+                if (auto *SI = dyn_cast<StoreInst>(UI)) {
+                  if (!SI->isSimple() || SI->getValueOperand() == I ||
+                      UI->getAccessType() != AI->getAllocatedType()) {
+                    UsedByOther = true;
+                    break;
+                  }
+                  continue;
+                }
+                WorkList.push_back(UI);
+              }
             }
           }
-        }
+          if (UsedByOther)
+            continue;
+          errs() << "Found alloca: " << *AI << ' ' << Path.string() << '\n';
+          Found = true;
+          break;
+        } else
+          break;
+      }
+
+      if (Found) {
+        ++FindCount;
+        break;
       }
     }
+
+    if (FindCount >= 20)
+      break;
 
     errs() << "\rProgress: " << ++Count;
   }
   errs() << '\n';
-
-  for (auto &K : CallDist)
-    errs() << K.first() << ' ' << K.second << '\n';
 
   return EXIT_SUCCESS;
 }
