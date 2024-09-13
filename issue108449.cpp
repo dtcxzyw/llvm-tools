@@ -44,6 +44,7 @@
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace llvm;
 namespace fs = std::filesystem;
@@ -86,6 +87,8 @@ int main(int argc, char **argv) {
   uint32_t Count = 0;
   uint32_t AssumeCount = 0;
   uint32_t DCCount = 0;
+  std::unordered_set<std::string> AssumeSet;
+  std::unordered_set<std::string> DCSet;
 
   for (auto &Path : InputFiles) {
     SMDiagnostic Err;
@@ -160,10 +163,12 @@ int main(int argc, char **argv) {
           if (match(&I, m_IDiv(m_Value(X), m_Value(Y))) && !I.isExact()) {
             if (IsImpliedByAssumes(&I, X, Y)) {
               ++AssumeCount;
+              AssumeSet.insert(Path.string());
               continue;
             }
             if (IsImpliedByDominatingConditions(&I, X, Y)) {
               ++DCCount;
+              DCSet.insert(Path.string());
               continue;
             }
           }
@@ -175,7 +180,13 @@ int main(int argc, char **argv) {
   }
   errs() << '\n';
 
-  errs() << AssumeCount << ' ' << DCCount << '\n';
+  errs() << "Assume: " << AssumeCount << '\n';
+  for (auto &Path : AssumeSet)
+    errs() << Path << '\n';
+
+  errs() << "DC: " << DCCount << '\n';
+  for (auto &Path : DCSet)
+    errs() << Path << '\n';
 
   return EXIT_SUCCESS;
 }
