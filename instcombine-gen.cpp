@@ -210,9 +210,16 @@ class FuncGenerator final {
       if (isa<Constant>(LHS) && isa<Constant>(RHS))
         return nullptr;
       static constexpr Intrinsic::ID IntArith[] = {
-          Intrinsic::sadd_with_overflow, Intrinsic::ssub_with_overflow,
-          Intrinsic::smul_with_overflow, Intrinsic::uadd_with_overflow,
-          Intrinsic::usub_with_overflow, Intrinsic::umul_with_overflow,
+          Intrinsic::smin,
+          Intrinsic::smax,
+          Intrinsic::umin,
+          Intrinsic::umax,
+          Intrinsic::sadd_with_overflow,
+          Intrinsic::ssub_with_overflow,
+          Intrinsic::smul_with_overflow,
+          Intrinsic::uadd_with_overflow,
+          Intrinsic::usub_with_overflow,
+          Intrinsic::umul_with_overflow,
           // Intrinsic::sadd_sat,           Intrinsic::ssub_sat,
           // Intrinsic::uadd_sat,           Intrinsic::usub_sat,
           // Intrinsic::sshl_sat,           Intrinsic::ushl_sat,
@@ -221,7 +228,14 @@ class FuncGenerator final {
       return Builder.CreateBinaryIntrinsic(IID, LHS, RHS);
     }
     case 6: {
-      return nullptr;
+      auto *Ty = randomNonBoolType();
+      auto *LHS = selectTypedVal(Ty);
+      auto *RHS = selectTypedVal(Ty);
+      if (isa<Constant>(LHS) && isa<Constant>(RHS))
+        return nullptr;
+      return Builder.CreateIntrinsic(
+          LHS->getType(), randomBool() ? Intrinsic::ucmp : Intrinsic::scmp,
+          {LHS, RHS});
       // auto *Ty = randomNonBoolType();
       // auto *X = selectTypedVal(Ty);
       // auto *Y = selectTypedVal(Ty);

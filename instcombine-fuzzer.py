@@ -29,6 +29,7 @@ def fuzz(idx):
             os.remove(tgt)
             return True
     except Exception as e:
+        # print(e)
         pass
 
     return False
