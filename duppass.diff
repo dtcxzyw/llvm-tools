@@ -1,0 +1,22 @@
+diff --git a/llvm/lib/Passes/StandardInstrumentations.cpp b/llvm/lib/Passes/StandardInstrumentations.cpp
+index 0ae3b2c84a5a..0ebaba82067e 100644
+--- a/llvm/lib/Passes/StandardInstrumentations.cpp
++++ b/llvm/lib/Passes/StandardInstrumentations.cpp
+@@ -475,7 +475,7 @@ template <typename T> void TextChangeReporter<T>::handleInitialIR(Any IR) {
+   auto *M = unwrapModule(IR, /*Force=*/true);
+   assert(M && "Expected module to be unwrapped when forced.");
+   Out << "*** IR Dump At Start ***\n";
+-  M->print(Out, nullptr);
++  // M->print(Out, nullptr);
+ }
+ 
+ template <typename T>
+@@ -532,7 +532,7 @@ void IRChangedPrinter::handleAfter(StringRef PassID, std::string &Name,
+     return;
+   }
+ 
+-  Out << "*** IR Dump After " << PassID << " on " << Name << " ***\n" << After;
++  Out << "*** IR Dump After " << PassID << " on " << Name << " ***\n";// << After;
+ }
+ 
+ IRChangedTester::~IRChangedTester() {}

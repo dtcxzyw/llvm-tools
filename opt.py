@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import tqdm
+import json
 from multiprocessing import Pool
 
 llvm_bin = sys.argv[1]
@@ -9,9 +10,10 @@ path = sys.argv[2]
 threads = int(sys.argv[3])
 
 work_list = []
+ignored = ["SwitchLookupTable::SwitchLookupTable"]
 
 for r,ds,fs in os.walk(path):
-    if 'optimized' not in r:
+    if '/original' not in r:
         continue
     for f in fs:
         if f.endswith('.ll'):
@@ -20,15 +22,16 @@ for r,ds,fs in os.walk(path):
 
 def verify(test_file):
     try:
-        subprocess.check_call([llvm_bin+"/opt", '--passes=verify', '--disable-output', test_file],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    except Exception:
-        return (test_file, True)
-    
-    try:
-        subprocess.check_call([llvm_bin+"/opt", "-mattr=+cf", "-passes=simplifycfg<hoist-loads-stores-with-cond-faulting>", '--disable-output', test_file],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        return (test_file, True)
+        ret = subprocess.run([llvm_bin+"/opt", "-O3", "--disable-output", test_file], capture_output=True)
+        if ret.returncode == 0:
+            return (test_file, True)
+        err = ret.stderr.decode('utf-8')
+        for key in ignored:
+            if key in err:
+                return (test_file, True)
+        return (test_file, False)
     except Exception as e:
-        # print(e)
+        print(e)
         pass
     
     return (test_file, False)

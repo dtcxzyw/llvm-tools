@@ -74,7 +74,7 @@ static bool matchLoadLUT(LoadInst &LI) {
 
   uint64_t IndexBW = DL.getIndexTypeSizeInBits(GEP->getType());
   APInt ConstOffset(IndexBW, 0);
-  MapVector<Value *, APInt> VariableOffsets;
+  SmallMapVector<Value *, APInt, 4> VariableOffsets;
   if (!GEP->collectOffset(DL, IndexBW, VariableOffsets, ConstOffset))
     return false;
 
