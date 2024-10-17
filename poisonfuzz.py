@@ -14,23 +14,28 @@ rounds = int(sys.argv[5])
 threads = int(sys.argv[6])
 
 tests = []
-known_issue = set(['select-cmp-cttz-ctlz.ll', 'shift-cttz-ctlz.ll','select-binop-cmp.ll','phi.ll','bit_ceil.ll','ispow2.ll','select.ll'])
+#known_issue = set(['select-cmp-cttz-ctlz.ll', 'shift-cttz-ctlz.ll','select-binop-cmp.ll','phi.ll','bit_ceil.ll','ispow2.ll','select.ll'])
+known_issue = ['phi.ll', 'select-binop-cmp.ll', 'simplify-libcalls-inreg.ll', 'memcmp-1.ll', 'opaque-ptr.ll', 'intptr2.ll']
+
+known_issue = set(known_issue)
 for r,ds,fs in os.walk(test_dir):
     for f in fs:
         if f.endswith('.ll') and f not in known_issue:
             test_path = os.path.join(r, f)
             with open(test_path) as ir:
                 val = ir.read()
-                if '@llvm.' in val and 'volatile' not in val and 'int2ptr' not in val and '@llvm.amdgpu.' not in val and '@llvm.x86.' not in val:
-                    tests.append(test_path)
-                    # try:
-                    #     ret = subprocess.check_output([alive_tv, '--smt-to=300', '--disable-undef-input', test_path], timeout=120.0)
-                    #     if '0 incorrect transformations' in ret.decode('utf-8'):
-                    #         # print(test_path)
-                    #         tests.append(test_path)
-                    # except Exception:
-                    #     pass
-                    
+                if 'volatile' not in val and 'int2ptr' not in val and '@llvm.amdgpu.' not in val and '@llvm.x86.' not in val:
+                    # if '@llvm.' in val
+                    if ' icmp ' in val:
+                        tests.append(test_path)
+                        # try:
+                        #     ret = subprocess.check_output([alive_tv, '--smt-to=300', '--disable-undef-input', test_path], timeout=120.0)
+                        #     if '0 incorrect transformations' in ret.decode('utf-8'):
+                        #         # print(test_path)
+                        #         tests.append(test_path)
+                        # except Exception:
+                        #     pass
+
 
 print("Total tests:", len(tests))
 
@@ -54,9 +59,8 @@ def fuzz(path):
         out = ret.stdout.decode('utf-8')
         ok = False
 
-        # FIXME: alive2 sigsegv
-        if 'incorrect transformations' not in out:
-            ok = True
+        # if 'incorrect transformations' not in out:
+        #     ok = True
         
         if 'Unsupported attribute' in out:
             ok = True

@@ -70,47 +70,55 @@ static bool mutate(Function &F) {
   bool Changed = false;
   for (auto &BB : F) {
     for (auto &I : BB) {
-      if (auto CB = dyn_cast<IntrinsicInst>(&I)) {
-        if (CB->getType()->isIntOrIntVectorTy() &&
-            !CB->hasRetAttr(Attribute::NoUndef) && randomBool()) {
-          CB->addRetAttr(Attribute::NoUndef);
-          Changed = true;
-        }
-        if (CB->getType()->isIntOrIntVectorTy() &&
-            !CB->hasRetAttr(Attribute::Range) && randomBool()) {
-          ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false);
-          APInt Zero = APInt::getZero(CR.getBitWidth());
-          if (CR.contains(Zero) && randomBool()) {
-            CB->addRangeRetAttr(
-                CR.intersectWith(ConstantRange(Zero).inverse()));
-            Changed = true;
-            continue;
-          }
-          APInt One = APInt(CR.getBitWidth(), 1);
-          if (CR.contains(One) && randomBool()) {
-            CB->addRangeRetAttr(CR.intersectWith(ConstantRange(One).inverse()));
-            Changed = true;
-            continue;
-          }
-          APInt Min = APInt::getSignedMinValue(CR.getBitWidth());
-          if (CR.contains(Min) && randomBool()) {
-            CB->addRangeRetAttr(CR.intersectWith(ConstantRange(Min).inverse()));
-            Changed = true;
-            continue;
-          }
-          APInt AllOnes = APInt::getAllOnes(CR.getBitWidth());
-          if (CR.contains(AllOnes) && randomBool()) {
-            CB->addRangeRetAttr(
-                CR.intersectWith(ConstantRange(AllOnes).inverse()));
-            Changed = true;
-            continue;
-          }
-        }
-        Intrinsic::ID IID = CB->getIntrinsicID();
-        if ((IID == Intrinsic::ctlz || IID == Intrinsic::cttz) &&
-            randomBool()) {
-          CB->setArgOperand(
-              1, ConstantExpr::getNot(cast<Constant>(CB->getArgOperand(1))));
+      // if (auto CB = dyn_cast<IntrinsicInst>(&I)) {
+      //   if (CB->getType()->isIntOrIntVectorTy() &&
+      //       !CB->hasRetAttr(Attribute::NoUndef) && randomBool()) {
+      //     CB->addRetAttr(Attribute::NoUndef);
+      //     Changed = true;
+      //   }
+      //   if (CB->getType()->isIntOrIntVectorTy() &&
+      //       !CB->hasRetAttr(Attribute::Range) && randomBool()) {
+      //     ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false);
+      //     APInt Zero = APInt::getZero(CR.getBitWidth());
+      //     if (CR.contains(Zero) && randomBool()) {
+      //       CB->addRangeRetAttr(
+      //           CR.intersectWith(ConstantRange(Zero).inverse()));
+      //       Changed = true;
+      //       continue;
+      //     }
+      //     APInt One = APInt(CR.getBitWidth(), 1);
+      //     if (CR.contains(One) && randomBool()) {
+      //       CB->addRangeRetAttr(CR.intersectWith(ConstantRange(One).inverse()));
+      //       Changed = true;
+      //       continue;
+      //     }
+      //     APInt Min = APInt::getSignedMinValue(CR.getBitWidth());
+      //     if (CR.contains(Min) && randomBool()) {
+      //       CB->addRangeRetAttr(CR.intersectWith(ConstantRange(Min).inverse()));
+      //       Changed = true;
+      //       continue;
+      //     }
+      //     APInt AllOnes = APInt::getAllOnes(CR.getBitWidth());
+      //     if (CR.contains(AllOnes) && randomBool()) {
+      //       CB->addRangeRetAttr(
+      //           CR.intersectWith(ConstantRange(AllOnes).inverse()));
+      //       Changed = true;
+      //       continue;
+      //     }
+      //   }
+      //   Intrinsic::ID IID = CB->getIntrinsicID();
+      //   if ((IID == Intrinsic::ctlz || IID == Intrinsic::cttz) &&
+      //       randomBool()) {
+      //     CB->setArgOperand(
+      //         1, ConstantExpr::getNot(cast<Constant>(CB->getArgOperand(1))));
+      //     Changed = true;
+      //   }
+      // }
+
+      if (auto *ICmp = dyn_cast<ICmpInst>(&I)) {
+        if ( // ICmp->isUnsigned() &&
+            !ICmp->hasSameSign() && randomBool()) {
+          ICmp->setSameSign();
           Changed = true;
         }
       }

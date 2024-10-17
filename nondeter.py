@@ -10,7 +10,7 @@ path = sys.argv[2]
 threads = int(sys.argv[3])
 
 work_list = []
-blockList = {"ipt.NumInstScanned"}
+allowList = {"simplifycfg.NumSimpl"}
 
 for r,ds,fs in os.walk(path):
     if '/original' not in r:
@@ -32,7 +32,7 @@ def verify(test_file):
             return (test_file, None)
         x = set()
         for k in out1:
-            if k in blockList:
+            if k not in allowList:
                 continue
             if k in out2 and out1[k] != out2[k]:
                 x.add(k)
@@ -55,7 +55,7 @@ for test_file, res in pool.imap_unordered(verify, work_list):
         progress.write(test_file + '\n')
         for k in res:
             s.add(k)
-        #exit(0)
+        exit(0)
 progress.close()
 
 for k in s:
