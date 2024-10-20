@@ -15,8 +15,11 @@ threads = int(sys.argv[6])
 
 tests = []
 #known_issue = set(['select-cmp-cttz-ctlz.ll', 'shift-cttz-ctlz.ll','select-binop-cmp.ll','phi.ll','bit_ceil.ll','ispow2.ll','select.ll'])
-known_issue = ['phi.ll', 'select-binop-cmp.ll', 'simplify-libcalls-inreg.ll', 'memcmp-1.ll', 'opaque-ptr.ll', 'intptr2.ll']
-
+known_issue = ['phi.ll', 'select-binop-cmp.ll', 'simplify-libcalls-inreg.ll', 'memcmp-1.ll', 'opaque-ptr.ll', 'intptr2.ll', 'minmax-fp.ll', 'simplify-demanded-fpclass.ll']
+known_issue += ['select-cmp-cttz-ctlz.ll', 'shift-cttz-ctlz.ll', 'bit_ceil.ll'] # 112068 112076
+known_issue += ['sub-of-negatible.ll', 'sub-of-negatible-inseltpoison.ll'] # 112666
+known_issue.append('funnel.ll') # Too complex
+known_issue.append('select.ll') # Too complex
 known_issue = set(known_issue)
 for r,ds,fs in os.walk(test_dir):
     for f in fs:
@@ -25,16 +28,10 @@ for r,ds,fs in os.walk(test_dir):
             with open(test_path) as ir:
                 val = ir.read()
                 if 'volatile' not in val and 'int2ptr' not in val and '@llvm.amdgpu.' not in val and '@llvm.x86.' not in val:
-                    # if '@llvm.' in val
-                    if ' icmp ' in val:
+                    # if '@llvm.abs' in val:
+                    # if ' icmp ' in val:
+                    if 'shr ' in val:
                         tests.append(test_path)
-                        # try:
-                        #     ret = subprocess.check_output([alive_tv, '--smt-to=300', '--disable-undef-input', test_path], timeout=120.0)
-                        #     if '0 incorrect transformations' in ret.decode('utf-8'):
-                        #         # print(test_path)
-                        #         tests.append(test_path)
-                        # except Exception:
-                        #     pass
 
 
 print("Total tests:", len(tests))

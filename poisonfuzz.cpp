@@ -3,12 +3,12 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include "llvm/Analysis/ValueTracking.h"
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/InstSimplifyFolder.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Analysis.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
@@ -70,50 +70,76 @@ static bool mutate(Function &F) {
   bool Changed = false;
   for (auto &BB : F) {
     for (auto &I : BB) {
-      // if (auto CB = dyn_cast<IntrinsicInst>(&I)) {
-      //   if (CB->getType()->isIntOrIntVectorTy() &&
-      //       !CB->hasRetAttr(Attribute::NoUndef) && randomBool()) {
-      //     CB->addRetAttr(Attribute::NoUndef);
-      //     Changed = true;
-      //   }
-      //   if (CB->getType()->isIntOrIntVectorTy() &&
-      //       !CB->hasRetAttr(Attribute::Range) && randomBool()) {
-      //     ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false);
-      //     APInt Zero = APInt::getZero(CR.getBitWidth());
-      //     if (CR.contains(Zero) && randomBool()) {
-      //       CB->addRangeRetAttr(
-      //           CR.intersectWith(ConstantRange(Zero).inverse()));
-      //       Changed = true;
-      //       continue;
-      //     }
-      //     APInt One = APInt(CR.getBitWidth(), 1);
-      //     if (CR.contains(One) && randomBool()) {
-      //       CB->addRangeRetAttr(CR.intersectWith(ConstantRange(One).inverse()));
-      //       Changed = true;
-      //       continue;
-      //     }
-      //     APInt Min = APInt::getSignedMinValue(CR.getBitWidth());
-      //     if (CR.contains(Min) && randomBool()) {
-      //       CB->addRangeRetAttr(CR.intersectWith(ConstantRange(Min).inverse()));
-      //       Changed = true;
-      //       continue;
-      //     }
-      //     APInt AllOnes = APInt::getAllOnes(CR.getBitWidth());
-      //     if (CR.contains(AllOnes) && randomBool()) {
-      //       CB->addRangeRetAttr(
-      //           CR.intersectWith(ConstantRange(AllOnes).inverse()));
-      //       Changed = true;
-      //       continue;
-      //     }
-      //   }
-      //   Intrinsic::ID IID = CB->getIntrinsicID();
-      //   if ((IID == Intrinsic::ctlz || IID == Intrinsic::cttz) &&
-      //       randomBool()) {
-      //     CB->setArgOperand(
-      //         1, ConstantExpr::getNot(cast<Constant>(CB->getArgOperand(1))));
-      //     Changed = true;
-      //   }
-      // }
+      if (auto CB = dyn_cast<IntrinsicInst>(&I)) {
+        if (CB->getType()->isIntOrIntVectorTy() &&
+            !CB->hasRetAttr(Attribute::NoUndef) && randomBool()) {
+          CB->addRetAttr(Attribute::NoUndef);
+          Changed = true;
+        }
+        if (CB->getType()->isIntOrIntVectorTy() &&
+            !CB->hasRetAttr(Attribute::Range) && randomBool()) {
+          ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false);
+          APInt Zero = APInt::getZero(CR.getBitWidth());
+          if (CR.contains(Zero) && randomBool()) {
+            CB->addRangeRetAttr(
+                CR.intersectWith(ConstantRange(Zero).inverse()));
+            Changed = true;
+            continue;
+          }
+          APInt One = APInt(CR.getBitWidth(), 1);
+          if (CR.contains(One) && randomBool()) {
+            CB->addRangeRetAttr(CR.intersectWith(ConstantRange(One).inverse()));
+            Changed = true;
+            continue;
+          }
+          APInt Min = APInt::getSignedMinValue(CR.getBitWidth());
+          if (CR.contains(Min) && randomBool()) {
+            CB->addRangeRetAttr(CR.intersectWith(ConstantRange(Min).inverse()));
+            Changed = true;
+            continue;
+          }
+          APInt AllOnes = APInt::getAllOnes(CR.getBitWidth());
+          if (CR.contains(AllOnes) && randomBool()) {
+            CB->addRangeRetAttr(
+                CR.intersectWith(ConstantRange(AllOnes).inverse()));
+            Changed = true;
+            continue;
+          }
+        }
+        Intrinsic::ID IID = CB->getIntrinsicID();
+        if ((IID == Intrinsic::ctlz || IID == Intrinsic::cttz ||
+             IID == Intrinsic::abs) &&
+            randomBool()) {
+          CB->setArgOperand(
+              1, ConstantExpr::getNot(cast<Constant>(CB->getArgOperand(1))));
+          Changed = true;
+        }
+      }
+
+      if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(&I)) {
+        if (randomBool()) {
+          I.setHasNoSignedWrap(!OBO->hasNoSignedWrap());
+          Changed = true;
+        }
+        if (randomBool()) {
+          I.setHasNoUnsignedWrap(!OBO->hasNoUnsignedWrap());
+          Changed = true;
+        }
+      }
+
+      if (auto *Disjoint = dyn_cast<PossiblyDisjointInst>(&I)) {
+        if (randomBool()) {
+          Disjoint->setIsDisjoint(!Disjoint->isDisjoint());
+          Changed = true;
+        }
+      }
+
+      if (auto *Exact = dyn_cast<PossiblyExactOperator>(&I)) {
+        if (randomBool()) {
+          I.setIsExact(!Exact->isExact());
+          Changed = true;
+        }
+      }
 
       if (auto *ICmp = dyn_cast<ICmpInst>(&I)) {
         if ( // ICmp->isUnsigned() &&
