@@ -62,7 +62,7 @@
 #include <filesystem>
 #include <memory>
 
-constexpr uint32_t MaxDepth = 4;
+constexpr uint32_t MaxDepth = 3;
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -277,14 +277,30 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   };
   auto addCond = [&](Value *V) {
     // TODO: use idoms instead?
-    for (auto BI : Q.DC->conditionsFor(V)) {
-      auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
-      if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
-        addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
-      auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
-      if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
-        addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
+    auto DTN = Q.DT->getNode(Root->getParent());
+    while (DTN) {
+      auto IDom = DTN->getIDom();
+      if (!IDom)
+        break;
+      auto *BI = dyn_cast<BranchInst>(IDom->getBlock()->getTerminator());
+      if (BI && BI->isConditional()) {
+        auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
+        if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
+          addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
+        auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
+        if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
+          addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
+      }
+      DTN = IDom;
     }
+    // for (auto BI : Q.DC->conditionsFor(V)) {
+    //   auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
+    //   if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
+    //     addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
+    //   auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
+    //   if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
+    //     addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
+    // }
     for (auto &AssumeVH : Q.AC->assumptionsFor(V)) {
       if (!AssumeVH)
         continue;
@@ -300,6 +316,8 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
     addCond(V);
   for (auto *I : NonTerminal)
     addCond(I);
+  if (PreConditions.empty())
+    return;
 
   SmallVector<Instruction *, 16> Queue;
   SmallVector<Instruction *, 16> WorkList;
@@ -448,10 +466,10 @@ static void visitFunc(Function &F, Module &NewM) {
     DC.registerBranch(BI);
     auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
     if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
-      if (InterestingBBs.count(BI->getSuccessor(0)))
-        AddEdge(BI, /*IsCondTrue=*/true, Q);
-      if (InterestingBBs.count(BI->getSuccessor(1)))
-        AddEdge(BI, /*IsCondTrue=*/false, Q);
+      // if (InterestingBBs.count(BI->getSuccessor(0)))
+      AddEdge(BI, /*IsCondTrue=*/true, Q);
+      // if (InterestingBBs.count(BI->getSuccessor(1)))
+      AddEdge(BI, /*IsCondTrue=*/false, Q);
     }
   }
 }
