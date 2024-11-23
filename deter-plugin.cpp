@@ -43,10 +43,11 @@ public:
 static PassPluginLibraryInfo getDeterPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "DeterministicCheck", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
-            PB.registerOptimizerLastEPCallback(
-                [](ModulePassManager &PM, OptimizationLevel Level) {
-                  PM.addPass(ModulePointerSummaryPass());
-                });
+            PB.registerOptimizerLastEPCallback([](ModulePassManager &PM,
+                                                  OptimizationLevel Level,
+                                                  ThinOrFullLTOPhase) {
+              PM.addPass(ModulePointerSummaryPass());
+            });
           }};
 }
 

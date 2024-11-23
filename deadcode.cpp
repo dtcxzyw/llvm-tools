@@ -6,6 +6,7 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
@@ -61,7 +62,7 @@
 #include <filesystem>
 #include <memory>
 
-constexpr uint32_t MaxDepth = 6;
+constexpr uint32_t MaxDepth = 4;
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -196,6 +197,35 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
       visit(Inst, Visited, NonTerminal, Depth);
   }
 }
+static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
+                        DenseSet<Value *> &Terminals,
+                        DenseSet<Instruction *> &NewNonTerminal,
+                        uint32_t Depth) {
+  if (match(V, m_ImmConstant()))
+    return !isa<GlobalValue>(V);
+  if (Terminals.contains(V))
+    return true;
+  if (Depth > MaxDepth)
+    return false;
+  if (auto *Inst = dyn_cast<Instruction>(V)) {
+    if (NonTerminal.contains(Inst))
+      return true;
+    if (isa<PHINode>(Inst) || isa<AllocaInst>(Inst) || isa<InvokeInst>(Inst))
+      return false;
+    if (auto *II = dyn_cast<IntrinsicInst>(Inst)) {
+      for (auto &Op : II->args())
+        if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
+          return false;
+    } else {
+      for (auto &Op : Inst->operands())
+        if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
+          return false;
+    }
+    NewNonTerminal.insert(Inst);
+    return true;
+  }
+  return false;
+}
 
 static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
                         const SimplifyQuery &Q) {
@@ -210,13 +240,67 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   for (auto *I : NonTerminal) {
     for (Value *Op : I->operands()) {
       if (auto *Inst = dyn_cast<Instruction>(Op);
-          Inst && NonTerminal.count(Inst))
+          Inst && NonTerminal.contains(Inst))
         Degree[Inst]++;
       else if ((!match(Op, m_ImmConstant()) || isa<GlobalValue>(Op)) &&
                !Op->getType()->isFunctionTy())
         Terminals.insert(Op);
     }
+    // Disallow external uses
+    if (I != Root)
+      for (auto *User : I->users())
+        if (auto *Inst = dyn_cast<Instruction>(User))
+          if (!NonTerminal.contains(Inst))
+            return;
   }
+
+  // Add conditions
+  DenseMap<Value *, bool> PreConditions;
+  auto addCondFor = [&](Value *Cond, bool CondIsTrue) {
+    if (!isa<Instruction>(Cond))
+      return;
+    DenseSet<Instruction *> NewNonTerminal;
+    if (!isValidCond(Cond, NonTerminal, Terminals, NewNonTerminal, /*Depth=*/0))
+      return;
+
+    for (auto *I : NewNonTerminal) {
+      if (NonTerminal.insert(I).second) {
+        for (Value *Op : I->operands()) {
+          if (auto *Inst = dyn_cast<Instruction>(Op)) {
+            if (NonTerminal.contains(Inst) || NewNonTerminal.contains(Inst))
+              Degree[Inst]++;
+          }
+        }
+      }
+    }
+    PreConditions[Cond] = CondIsTrue;
+  };
+  auto addCond = [&](Value *V) {
+    // TODO: use idoms instead?
+    for (auto BI : Q.DC->conditionsFor(V)) {
+      auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
+      if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
+        addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
+      auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
+      if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
+        addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
+    }
+    for (auto &AssumeVH : Q.AC->assumptionsFor(V)) {
+      if (!AssumeVH)
+        continue;
+      CallInst *I = cast<CallInst>(AssumeVH);
+      if (!isValidAssumeForContext(I, Q.CxtI, Q.DT))
+        continue;
+
+      auto *Cond = I->getArgOperand(0);
+      addCondFor(Cond, /*CondIsTrue=*/true);
+    }
+  };
+  for (auto *V : Terminals)
+    addCond(V);
+  for (auto *I : NonTerminal)
+    addCond(I);
+
   SmallVector<Instruction *, 16> Queue;
   SmallVector<Instruction *, 16> WorkList;
   for (auto *I : NonTerminal) {
@@ -264,14 +348,22 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
           CalledFunction->getAttributes()));
     }
     // Check external uses
-    if (I != Root)
-      for (auto *User : I->users())
-        if (auto *Inst = dyn_cast<Instruction>(User))
-          if (!NonTerminal.count(Inst)) {
-            NewI->setName("use");
-            break;
-          }
+    // if (I != Root)
+    //   for (auto *User : I->users())
+    //     if (auto *Inst = dyn_cast<Instruction>(User))
+    //       if (!NonTerminal.count(Inst)) {
+    //         NewI->setName("use");
+    //         break;
+    //       }
     NewI->insertInto(BB, BB->end());
+    auto Iter = PreConditions.find(I);
+    if (Iter != PreConditions.end()) {
+      IRBuilder<> Builder(BB, BB->end());
+      if (Iter->second)
+        Builder.CreateAssumption(NewI);
+      else
+        Builder.CreateAssumption(Builder.CreateNot(NewI));
+    }
     ValueMap[I] = NewI;
   }
 
@@ -289,6 +381,7 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   //   Root->getParent()->getParent()->dump();
   //   errs().flush();
   if (verifyFunction(*F, &errs())) {
+    errs() << *F;
     abort();
   }
 
@@ -333,32 +426,33 @@ static void visitFunc(Function &F, Module &NewM) {
       InterestingBBs.insert(&BB);
 
   for (auto *BB : RPOT) {
-    for (auto &I : make_early_inc_range(*BB)) {
-      if (auto *II = dyn_cast<MinMaxIntrinsic>(&I)) {
-        if (II->getType()->isVectorTy())
-          continue;
-        auto Pred = ICmpInst::getNonStrictPredicate(II->getPredicate());
-        auto *Cmp = ICmpInst::Create(Instruction::ICmp, Pred, II->getOperand(0),
-                                     II->getOperand(1), "", II);
-        auto Q = SQ.getWithInstruction(Cmp);
-        extractCond(Cmp, true, NewM, Q);
-        Cmp->setPredicate(ICmpInst::getSwappedPredicate(Pred));
-        extractCond(Cmp, true, NewM, Q);
-        Cmp->eraseFromParent();
-      }
-    }
+    // for (auto &I : make_early_inc_range(*BB)) {
+    //   if (auto *II = dyn_cast<MinMaxIntrinsic>(&I)) {
+    //     if (II->getType()->isVectorTy())
+    //       continue;
+    //     auto Pred = ICmpInst::getNonStrictPredicate(II->getPredicate());
+    //     auto *Cmp = ICmpInst::Create(Instruction::ICmp, Pred,
+    //     II->getOperand(0),
+    //                                  II->getOperand(1), "", II);
+    //     auto Q = SQ.getWithInstruction(Cmp);
+    //     extractCond(Cmp, true, NewM, Q);
+    //     Cmp->setPredicate(ICmpInst::getSwappedPredicate(Pred));
+    //     extractCond(Cmp, true, NewM, Q);
+    //     Cmp->eraseFromParent();
+    //   }
+    // }
 
     auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
     if (!BI || BI->isUnconditional())
       continue;
     DC.registerBranch(BI);
-    // auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
-    // if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
-    //   if (InterestingBBs.count(BI->getSuccessor(0)))
-    //     AddEdge(BI, /*IsCondTrue=*/true, Q);
-    //   if (InterestingBBs.count(BI->getSuccessor(1)))
-    //     AddEdge(BI, /*IsCondTrue=*/false, Q);
-    // }
+    auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
+    if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
+      if (InterestingBBs.count(BI->getSuccessor(0)))
+        AddEdge(BI, /*IsCondTrue=*/true, Q);
+      if (InterestingBBs.count(BI->getSuccessor(1)))
+        AddEdge(BI, /*IsCondTrue=*/false, Q);
+    }
   }
 }
 
