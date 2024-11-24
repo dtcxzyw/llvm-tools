@@ -205,12 +205,17 @@ static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
     return !isa<GlobalValue>(V);
   if (Terminals.contains(V))
     return true;
+  if (isa<Argument>(V)) {
+    Terminals.insert(V);
+    return true;
+  }
   if (Depth > MaxDepth)
     return false;
   if (auto *Inst = dyn_cast<Instruction>(V)) {
-    if (NonTerminal.contains(Inst))
+    if (NonTerminal.contains(Inst) || NewNonTerminal.contains(Inst))
       return true;
-    if (isa<PHINode>(Inst) || isa<AllocaInst>(Inst) || isa<InvokeInst>(Inst))
+    if (isa<PHINode>(Inst) || isa<AllocaInst>(Inst) || isa<InvokeInst>(Inst) ||
+        isa<LoadInst>(Inst))
       return false;
     if (auto *II = dyn_cast<IntrinsicInst>(Inst)) {
       for (auto &Op : II->args())
@@ -232,7 +237,7 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   DenseSet<Value *> Visited;
   DenseSet<Instruction *> NonTerminal;
   visit(Root, Visited, NonTerminal, /*Depth=*/0);
-  if (NonTerminal.size() <= 1)
+  if (NonTerminal.empty())
     return;
   DenseSet<Value *> Terminals;
 
@@ -250,14 +255,20 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
     if (I != Root)
       for (auto *User : I->users())
         if (auto *Inst = dyn_cast<Instruction>(User))
-          if (!NonTerminal.contains(Inst))
+          if (!NonTerminal.contains(Inst)) {
+            // errs() << "External use: " << *Inst << ' ' << *I << "\n";
             return;
+          }
   }
 
   // Add conditions
   DenseMap<Value *, bool> PreConditions;
+  DenseSet<Value *> CheckedConditions;
   auto addCondFor = [&](Value *Cond, bool CondIsTrue) {
+    // errs() << "Check Cond: " << *Cond << " " << CondIsTrue << "\n";
     if (!isa<Instruction>(Cond))
+      return;
+    if (!CheckedConditions.insert(Cond).second)
       return;
     DenseSet<Instruction *> NewNonTerminal;
     if (!isValidCond(Cond, NonTerminal, Terminals, NewNonTerminal, /*Depth=*/0))
@@ -274,25 +285,26 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
       }
     }
     PreConditions[Cond] = CondIsTrue;
+    // errs() << "Cond: " << *Cond << " " << CondIsTrue << "\n";
   };
-  auto addCond = [&](Value *V) {
-    // TODO: use idoms instead?
-    auto DTN = Q.DT->getNode(Root->getParent());
-    while (DTN) {
-      auto IDom = DTN->getIDom();
-      if (!IDom)
-        break;
-      auto *BI = dyn_cast<BranchInst>(IDom->getBlock()->getTerminator());
-      if (BI && BI->isConditional()) {
-        auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
-        if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
-          addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
-        auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
-        if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
-          addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
-      }
-      DTN = IDom;
+  auto DTN = Q.DT->getNode(Root->getParent());
+  while (DTN) {
+    auto IDom = DTN->getIDom();
+    if (!IDom)
+      break;
+    auto *BI = dyn_cast<BranchInst>(IDom->getBlock()->getTerminator());
+    if (BI && BI->isConditional()) {
+      // errs() << "BI: " << *BI << "\n";
+      auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
+      if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
+        addCondFor(BI->getCondition(), /*CondIsTrue=*/true);
+      auto Edge2 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(1));
+      if (Q.DT->dominates(Edge2, Q.CxtI->getParent()))
+        addCondFor(BI->getCondition(), /*CondIsTrue=*/false);
     }
+    DTN = IDom;
+  }
+  auto addCond = [&](Value *V) {
     // for (auto BI : Q.DC->conditionsFor(V)) {
     //   auto Edge1 = BasicBlockEdge(BI->getParent(), BI->getSuccessor(0));
     //   if (Q.DT->dominates(Edge1, Q.CxtI->getParent()))
@@ -497,10 +509,14 @@ static void cleanup(Module &M) {
     if (F.empty())
       continue;
     if (F.getName().starts_with("src")) {
-      auto *RetValue =
-          cast<ReturnInst>(F.getEntryBlock().getTerminator())->getReturnValue();
-      if (isa<Constant>(RetValue) || F.getEntryBlock().size() > 5)
+      if (isa<UnreachableInst>(F.getEntryBlock().getTerminator()))
         DeadFuncs.push_back(F.getName().str());
+      else {
+        auto *RetValue = cast<ReturnInst>(F.getEntryBlock().getTerminator())
+                             ->getReturnValue();
+        if (isa<Constant>(RetValue) || F.getEntryBlock().size() > 5)
+          DeadFuncs.push_back(F.getName().str());
+      }
     }
   }
 
@@ -563,7 +579,9 @@ int main(int argc, char **argv) {
         continue;
       visitFunc(F, NewM);
     }
+    // NewM.dump();
     cleanup(NewM);
+    // NewM.dump();
 
     bool Valid = false;
     for (auto &F : NewM) {
