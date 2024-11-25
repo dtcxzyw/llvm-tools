@@ -198,15 +198,16 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
   }
 }
 static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
-                        DenseSet<Value *> &Terminals,
+                        const DenseSet<Value *> &Terminals,
+                        DenseSet<Value *> &NewTerminal,
                         DenseSet<Instruction *> &NewNonTerminal,
                         uint32_t Depth) {
   if (match(V, m_ImmConstant()))
     return !isa<GlobalValue>(V);
-  if (Terminals.contains(V))
+  if (Terminals.contains(V) || NewTerminal.contains(V))
     return true;
   if (isa<Argument>(V)) {
-    Terminals.insert(V);
+    NewTerminal.insert(V);
     return true;
   }
   if (Depth > MaxDepth)
@@ -215,17 +216,20 @@ static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
     if (NonTerminal.contains(Inst) || NewNonTerminal.contains(Inst))
       return true;
     if (isa<PHINode>(Inst) || isa<AllocaInst>(Inst) || isa<InvokeInst>(Inst) ||
-        isa<LoadInst>(Inst))
+        isa<LoadInst>(Inst) || isa<AtomicCmpXchgInst>(Inst) ||
+        isa<AtomicRMWInst>(Inst))
       return false;
     if (auto *II = dyn_cast<IntrinsicInst>(Inst)) {
       for (auto &Op : II->args())
-        if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
+        if (!isValidCond(Op, NonTerminal, Terminals, NewTerminal,
+                         NewNonTerminal, Depth + 1))
           return false;
     } else {
       if (isa<CallInst>(Inst))
         return false;
       for (auto &Op : Inst->operands())
-        if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
+        if (!isValidCond(Op, NonTerminal, Terminals, NewTerminal,
+                         NewNonTerminal, Depth + 1))
           return false;
     }
     NewNonTerminal.insert(Inst);
@@ -266,16 +270,50 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   // Add conditions
   DenseMap<Value *, bool> PreConditions;
   DenseSet<Value *> CheckedConditions;
+
+  auto VerifyTypes = [](const DenseSet<Value *> &Terminals,
+                        const DenseSet<Instruction *> &NonTerminal) {
+    auto IsValidType = [](Type *Ty) {
+      // backdoor for llvm.op.with.overflow
+      if (auto *StructTy = dyn_cast<StructType>(Ty))
+        return StructTy->getStructNumElements() == 2 &&
+               StructTy->getElementType(0)->isIntOrIntVectorTy() &&
+               StructTy->getElementType(1)->isIntOrIntVectorTy(1);
+      return Ty->isIntOrIntVectorTy() || Ty->isFunctionTy() ||
+             Ty->isPointerTy() || Ty->isFloatTy() || Ty->isDoubleTy() ||
+             Ty->isHalfTy() || Ty->isVoidTy();
+    };
+    for (auto *I : Terminals)
+      if (!IsValidType(I->getType()))
+        return false;
+    for (auto *I : NonTerminal) {
+      if (!IsValidType(I->getType()))
+        return false;
+      for (Value *Op : I->operands()) {
+        if (!IsValidType(Op->getType()))
+          return false;
+      }
+    }
+    return true;
+  };
+
   auto addCondFor = [&](Value *Cond, bool CondIsTrue) {
     // errs() << "Check Cond: " << *Cond << " " << CondIsTrue << "\n";
     if (!isa<Instruction>(Cond))
       return;
     if (!CheckedConditions.insert(Cond).second)
       return;
+    DenseSet<Value *> NewTerminals;
     DenseSet<Instruction *> NewNonTerminal;
-    if (!isValidCond(Cond, NonTerminal, Terminals, NewNonTerminal, /*Depth=*/0))
+    if (!isValidCond(Cond, NonTerminal, Terminals, NewTerminals, NewNonTerminal,
+                     /*Depth=*/0))
       return;
 
+    if (!VerifyTypes(NewTerminals, NewNonTerminal))
+      return;
+
+    for (auto *V : NewTerminals)
+      Terminals.insert(V);
     for (auto *I : NewNonTerminal) {
       if (NonTerminal.insert(I).second) {
         for (Value *Op : I->operands()) {
@@ -331,6 +369,8 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
   for (auto *I : NonTerminal)
     addCond(I);
   if (PreConditions.empty())
+    return;
+  if (!VerifyTypes(Terminals, NonTerminal))
     return;
 
   SmallVector<Instruction *, 16> Queue;

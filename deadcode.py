@@ -34,7 +34,9 @@ with open('alive2.log', 'w') as f:
     for test_file, res in pool.imap_unordered(verify, work_list):
         if res is None:
             f.write(f'ERROR: {test_file}\n')
+            f.flush()
         if res:
             f.write(f'PASS: {test_file}\n')
+            f.flush()
         progress.update()
     progress.close()
