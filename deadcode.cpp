@@ -222,6 +222,8 @@ static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
         if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
           return false;
     } else {
+      if (isa<CallInst>(Inst))
+        return false;
       for (auto &Op : Inst->operands())
         if (!isValidCond(Op, NonTerminal, Terminals, NewNonTerminal, Depth + 1))
           return false;
@@ -509,14 +511,23 @@ static void cleanup(Module &M) {
     if (F.empty())
       continue;
     if (F.getName().starts_with("src")) {
-      if (isa<UnreachableInst>(F.getEntryBlock().getTerminator()))
+      auto IsDeadFunc = [&] {
+        if (isa<UnreachableInst>(F.getEntryBlock().getTerminator()))
+          return true;
+        else {
+          auto *RetValue = cast<ReturnInst>(F.getEntryBlock().getTerminator())
+                               ->getReturnValue();
+          if (isa<Constant>(RetValue) || F.getEntryBlock().size() > 7)
+            return true;
+        }
+
+        for (auto &I : F.getEntryBlock())
+          if (isa<AssumeInst>(&I))
+            return false;
+        return true;
+      };
+      if (IsDeadFunc())
         DeadFuncs.push_back(F.getName().str());
-      else {
-        auto *RetValue = cast<ReturnInst>(F.getEntryBlock().getTerminator())
-                             ->getReturnValue();
-        if (isa<Constant>(RetValue) || F.getEntryBlock().size() > 5)
-          DeadFuncs.push_back(F.getName().str());
-      }
     }
   }
 
