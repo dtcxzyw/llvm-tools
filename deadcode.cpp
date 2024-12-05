@@ -123,14 +123,7 @@ static bool isLikelyToBeDead(BasicBlock &BB) {
 
 uint32_t Idx;
 
-static void visit(Instruction *I, DenseSet<Value *> &Visited,
-                  DenseSet<Instruction *> &NonTerminal, uint32_t Depth) {
-  if (!Visited.insert(I).second)
-    return;
-
-  if (Depth++ > MaxDepth)
-    return;
-
+static bool isValidInst(Instruction *I) {
   switch (I->getOpcode()) {
   case Instruction::Call: {
     if (auto *II = dyn_cast<IntrinsicInst>(I)) {
@@ -161,12 +154,12 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
       case Intrinsic::usub_with_overflow:
       case Intrinsic::smul_with_overflow:
       case Intrinsic::umul_with_overflow:
-        break;
+        return true;
       default:
-        return;
+        return false;
       }
     } else
-      return;
+      return false;
     break;
   }
   case Instruction::Add:
@@ -186,10 +179,25 @@ static void visit(Instruction *I, DenseSet<Value *> &Visited,
   case Instruction::AShr:
   case Instruction::ICmp:
   case Instruction::ExtractElement:
-    break;
+  case Instruction::SExt:
+  case Instruction::ZExt:
+  case Instruction::Trunc:
+    return true;
   default:
-    return;
+    return false;
   }
+}
+
+static void visit(Instruction *I, DenseSet<Value *> &Visited,
+                  DenseSet<Instruction *> &NonTerminal, uint32_t Depth) {
+  if (!Visited.insert(I).second)
+    return;
+
+  if (Depth++ > MaxDepth)
+    return;
+
+  if (!isValidInst(I))
+    return;
 
   NonTerminal.insert(I);
   for (auto &Op : I->operands()) {
@@ -215,9 +223,7 @@ static bool isValidCond(Value *V, DenseSet<Instruction *> &NonTerminal,
   if (auto *Inst = dyn_cast<Instruction>(V)) {
     if (NonTerminal.contains(Inst) || NewNonTerminal.contains(Inst))
       return true;
-    if (isa<PHINode>(Inst) || isa<AllocaInst>(Inst) || isa<InvokeInst>(Inst) ||
-        isa<LoadInst>(Inst) || isa<AtomicCmpXchgInst>(Inst) ||
-        isa<AtomicRMWInst>(Inst))
+    if (!isValidInst(Inst))
       return false;
     if (auto *II = dyn_cast<IntrinsicInst>(Inst)) {
       for (auto &Op : II->args())
