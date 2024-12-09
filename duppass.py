@@ -58,7 +58,7 @@ work_list = work_list[:1000]
 
 def verify(test_file):
     try:
-        ret = subprocess.run([llvm_bin+"/opt", "-O3", "--print-changed", "--disable-output", test_file], capture_output=True, timeout=300)
+        ret = subprocess.run([llvm_bin+"/opt", "-O3", "--print-changed", "--disable-output", test_file], capture_output=True, timeout=30)
         if ret.returncode == 0:
             err = ret.stderr.decode('utf-8')
             return (test_file, extract_pass_seq(err))

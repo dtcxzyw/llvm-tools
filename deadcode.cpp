@@ -178,7 +178,7 @@ static bool isValidInst(Instruction *I) {
   case Instruction::LShr:
   case Instruction::AShr:
   case Instruction::ICmp:
-  case Instruction::ExtractElement:
+  case Instruction::ExtractValue:
   case Instruction::SExt:
   case Instruction::ZExt:
   case Instruction::Trunc:
@@ -264,7 +264,7 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
         Terminals.insert(Op);
     }
     // Disallow external uses
-    if (I != Root)
+    if (I != Root && !isa<WithOverflowInst>(I))
       for (auto *User : I->users())
         if (auto *Inst = dyn_cast<Instruction>(User))
           if (!NonTerminal.contains(Inst)) {
@@ -374,10 +374,11 @@ static void extractCond(Instruction *Root, bool IsCondTrue, Module &NewM,
     addCond(V);
   for (auto *I : NonTerminal)
     addCond(I);
-  if (PreConditions.empty())
-    return;
+  // if (PreConditions.empty())
+  //   return;
   if (!VerifyTypes(Terminals, NonTerminal))
     return;
+  // errs() << "Extract: " << *Root << '\n';
 
   SmallVector<Instruction *, 16> Queue;
   SmallVector<Instruction *, 16> WorkList;
@@ -504,33 +505,69 @@ static void visitFunc(Function &F, Module &NewM) {
       InterestingBBs.insert(&BB);
 
   for (auto *BB : RPOT) {
-    // for (auto &I : make_early_inc_range(*BB)) {
-    //   if (auto *II = dyn_cast<MinMaxIntrinsic>(&I)) {
-    //     if (II->getType()->isVectorTy())
-    //       continue;
-    //     auto Pred = ICmpInst::getNonStrictPredicate(II->getPredicate());
-    //     auto *Cmp = ICmpInst::Create(Instruction::ICmp, Pred,
-    //     II->getOperand(0),
-    //                                  II->getOperand(1), "", II);
-    //     auto Q = SQ.getWithInstruction(Cmp);
-    //     extractCond(Cmp, true, NewM, Q);
-    //     Cmp->setPredicate(ICmpInst::getSwappedPredicate(Pred));
-    //     extractCond(Cmp, true, NewM, Q);
-    //     Cmp->eraseFromParent();
-    //   }
-    // }
+    for (auto &I : make_early_inc_range(*BB)) {
+      // if (auto *II = dyn_cast<MinMaxIntrinsic>(&I)) {
+      //   if (II->getType()->isVectorTy())
+      //     continue;
+      //   auto Pred = ICmpInst::getNonStrictPredicate(II->getPredicate());
+      //   auto *Cmp = ICmpInst::Create(Instruction::ICmp, Pred,
+      //   II->getOperand(0),
+      //                                II->getOperand(1), "", II);
+      //   auto Q = SQ.getWithInstruction(Cmp);
+      //   extractCond(Cmp, true, NewM, Q);
+      //   Cmp->setPredicate(ICmpInst::getSwappedPredicate(Pred));
+      //   extractCond(Cmp, true, NewM, Q);
+      //   Cmp->eraseFromParent();
+      // }
+      auto HandleOverflow = [&](Intrinsic::ID IID, Value *X, Value *Y,
+                                IntrinsicInst *II) {
+        if (X->getType()->isVectorTy())
+          return;
+        assert(IID == II->getIntrinsicID());
+        auto *Overflow = ExtractValueInst::Create(
+            II, 1, "", II->getNextNode()->getIterator());
+        extractCond(Overflow, /*IsCondTrue=*/false, NewM,
+                    SQ.getWithInstruction(Overflow));
+        Overflow->eraseFromParent();
+      };
+      if (auto *II = dyn_cast<WithOverflowInst>(&I)) {
+        HandleOverflow(II->getIntrinsicID(), II->getArgOperand(0),
+                       II->getArgOperand(1), II);
+      }
+      // if (auto *II = dyn_cast<SaturatingInst>(&I)) {
+      //   Intrinsic::ID IID = Intrinsic::not_intrinsic;
+      //   switch (II->getIntrinsicID()) {
+      //   case Intrinsic::sadd_sat:
+      //     IID = Intrinsic::sadd_with_overflow;
+      //     break;
+      //   case Intrinsic::uadd_sat:
+      //     IID = Intrinsic::uadd_with_overflow;
+      //     break;
+      //   case Intrinsic::ssub_sat:
+      //     IID = Intrinsic::ssub_with_overflow;
+      //     break;
+      //   case Intrinsic::usub_sat:
+      //     IID = Intrinsic::usub_with_overflow;
+      //     break;
+      //   default:
+      //     break;
+      //   }
+      //   if (IID != Intrinsic::not_intrinsic)
+      //     HandleOverflow(IID, II->getArgOperand(0), II->getArgOperand(1));
+      // }
+    }
 
     auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
     if (!BI || BI->isUnconditional())
       continue;
     DC.registerBranch(BI);
     auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
-    if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
-      // if (InterestingBBs.count(BI->getSuccessor(0)))
-      AddEdge(BI, /*IsCondTrue=*/true, Q);
-      // if (InterestingBBs.count(BI->getSuccessor(1)))
-      AddEdge(BI, /*IsCondTrue=*/false, Q);
-    }
+    // if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
+    //   // if (InterestingBBs.count(BI->getSuccessor(0)))
+    //   AddEdge(BI, /*IsCondTrue=*/true, Q);
+    //   // if (InterestingBBs.count(BI->getSuccessor(1)))
+    //   AddEdge(BI, /*IsCondTrue=*/false, Q);
+    // }
   }
 }
 
@@ -567,10 +604,11 @@ static void cleanup(Module &M) {
             return true;
         }
 
-        for (auto &I : F.getEntryBlock())
-          if (isa<AssumeInst>(&I))
-            return false;
-        return true;
+        // for (auto &I : F.getEntryBlock())
+        //   if (isa<AssumeInst>(&I))
+        //     return false;
+        // return true;
+        return false;
       };
       if (IsDeadFunc())
         DeadFuncs.push_back(F.getName().str());
