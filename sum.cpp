@@ -57,11 +57,7 @@ int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
 
   std::vector<fs::path> InputFiles;
-  std::vector<std::string> BlockList{
-      "ruby/optimized/vm.ll",
-      "/regexec.ll",
-      "quickjs/optimized/quickjs.ll",
-  };
+  std::vector<std::string> BlockList{};
   for (auto &Entry : fs::recursive_directory_iterator(std::string(argv[1]))) {
     if (Entry.is_regular_file()) {
       auto &Path = Entry.path();

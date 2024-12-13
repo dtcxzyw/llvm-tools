@@ -124,11 +124,7 @@ static bool visitFunc(Function &F) {
 int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
   cl::ParseCommandLineOptions(argc, argv, "potential dead code extractor\n");
-  std::vector<std::string> BlockList{
-      "ruby/optimized/vm.ll",
-      "/regexec.ll",
-      "quickjs/optimized/quickjs.ll",
-  };
+  std::vector<std::string> BlockList{};
 
   std::vector<fs::path> InputFiles;
   for (auto &Entry : fs::recursive_directory_iterator(std::string(InputDir))) {

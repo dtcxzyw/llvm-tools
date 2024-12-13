@@ -9,11 +9,7 @@ path = sys.argv[2]
 threads = int(sys.argv[3])
 
 work_list = []
-block_list = [
-  "ruby/optimized/vm.ll",
-  "/regexec.ll",
-  "quickjs/optimized/quickjs.ll",
-]
+block_list = []
 
 for r,ds,fs in os.walk(path):
     if 'optimized' not in r:

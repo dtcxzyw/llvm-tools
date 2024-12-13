@@ -421,11 +421,7 @@ int main(int argc, char **argv) {
   InitLLVM Init{argc, argv};
   cl::ParseCommandLineOptions(argc, argv, "scanner\n");
 
-  std::vector<std::string> BlockList{
-      "ruby/optimized/vm.ll",
-      "/regexec.ll",
-      "quickjs/optimized/quickjs.ll",
-  };
+  std::vector<std::string> BlockList{};
 
   {
     LLVMContext Context;
