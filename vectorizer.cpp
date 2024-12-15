@@ -173,7 +173,7 @@ static uint32_t getMaxScale(Function &F, const DataLayout &DL) {
 
       bool UseSigned = true;
       bool UseUnsigned = true;
-      ICmpInst::Predicate Pred;
+      CmpPredicate Pred;
       if (match(&I, m_ICmp(Pred, m_Value(), m_Value()))) {
         if (ICmpInst::isEquality(Pred))
           UseSigned = UseUnsigned = false;

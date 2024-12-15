@@ -93,7 +93,7 @@ static bool visitFunc(Function &F) {
           while (DTN && DTN->getIDom()) {
             auto *DomBB = DTN->getIDom()->getBlock();
             if (auto *Branch = dyn_cast<BranchInst>(DomBB->getTerminator())) {
-              ICmpInst::Predicate Pred;
+              CmpPredicate Pred;
               if (Branch->isConditional() &&
                   match(Branch->getCondition(),
                         m_c_ICmp(Pred, m_Specific(LHS->getPointerOperand()),

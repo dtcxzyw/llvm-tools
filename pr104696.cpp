@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
           const APInt *C1;
           const APInt *C2;
           Value *X;
-          ICmpInst::Predicate Pred;
+          CmpPredicate Pred;
           if (match(&I, m_ICmp(Pred, m_NUWShl(m_APInt(C1), m_Value(X)),
                                m_APInt(C2))) &&
               ICmpInst::isUnsigned(Pred)) {

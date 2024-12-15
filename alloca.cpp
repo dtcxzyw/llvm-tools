@@ -3,8 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include "llvm/ADT/SmallPtrSet.h"
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
