@@ -1,0 +1,207 @@
+diff --git a/llvm/include/llvm/ADT/SmallVector.h b/llvm/include/llvm/ADT/SmallVector.h
+index bd3e887e36bc..d87d9e39272a 100644
+--- a/llvm/include/llvm/ADT/SmallVector.h
++++ b/llvm/include/llvm/ADT/SmallVector.h
+@@ -29,6 +29,7 @@
+ #include <new>
+ #include <type_traits>
+ #include <utility>
++#include <experimental/source_location>
+ 
+ namespace llvm {
+ 
+@@ -52,7 +53,7 @@ using EnableIfConvertibleToInputIterator = std::enable_if_t<std::is_convertible<
+ template <class Size_T> class SmallVectorBase {
+ protected:
+   void *BeginX;
+-  Size_T Size = 0, Capacity;
++  Size_T Size = 0, MaxSize = 0, Capacity;
+ 
+   /// The maximum value of the Size_T used.
+   static constexpr size_t SizeTypeMax() {
+@@ -76,8 +77,8 @@ protected:
+ 
+ public:
+   size_t size() const { return Size; }
++  size_t maxsize() const { return MaxSize; }
+   size_t capacity() const { return Capacity; }
+-
+   [[nodiscard]] bool empty() const { return !Size; }
+ 
+ protected:
+@@ -88,6 +89,7 @@ protected:
+   void set_size(size_t N) {
+     assert(N <= capacity()); // implies no overflow in assignment
+     Size = static_cast<Size_T>(N);
++    MaxSize = std::max(MaxSize, Size);
+   }
+ 
+   /// Set the array data pointer to \p Begin and capacity to \p N.
+@@ -593,6 +595,7 @@ protected:
+       free(this->begin());
+     this->BeginX = RHS.BeginX;
+     this->Size = RHS.Size;
++    this->MaxSize = std::max(this->MaxSize, this->Size);
+     this->Capacity = RHS.Capacity;
+     RHS.resetToSmall();
+   }
+@@ -1174,6 +1177,8 @@ template <typename T> struct CalculateSmallVectorDefaultInlinedElements {
+       NumElementsThatFit == 0 ? 1 : NumElementsThatFit;
+ };
+ 
++void destorySmallVector(unsigned MaxSize, unsigned N, unsigned Line, const char * FileName);
++
+ /// This is a 'vector' (really, a variable-sized array), optimized
+ /// for the case when the array is small.  It contains some number of elements
+ /// in-place, which allows it to avoid heap allocation when the actual number of
+@@ -1194,46 +1199,48 @@ template <typename T,
+           unsigned N = CalculateSmallVectorDefaultInlinedElements<T>::value>
+ class LLVM_GSL_OWNER SmallVector : public SmallVectorImpl<T>,
+                                    SmallVectorStorage<T, N> {
++  std::experimental::source_location mLoc;
+ public:
+-  SmallVector() : SmallVectorImpl<T>(N) {}
++  SmallVector(const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {}
+ 
+   ~SmallVector() {
+     // Destroy the constructed elements in the vector.
++    destorySmallVector(this->maxsize(), N, mLoc.line(), mLoc.file_name());
+     this->destroy_range(this->begin(), this->end());
+   }
+ 
+-  explicit SmallVector(size_t Size)
+-    : SmallVectorImpl<T>(N) {
++  explicit SmallVector(size_t Size, const std::experimental::source_location &Loc = std::experimental::source_location::current())
++    : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->resize(Size);
+   }
+ 
+-  SmallVector(size_t Size, const T &Value)
+-    : SmallVectorImpl<T>(N) {
++  SmallVector(size_t Size, const T &Value, const std::experimental::source_location &Loc = std::experimental::source_location::current())
++    : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->assign(Size, Value);
+   }
+ 
+   template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
+-  SmallVector(ItTy S, ItTy E) : SmallVectorImpl<T>(N) {
++  SmallVector(ItTy S, ItTy E, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->append(S, E);
+   }
+ 
+   template <typename RangeTy>
+-  explicit SmallVector(const iterator_range<RangeTy> &R)
+-      : SmallVectorImpl<T>(N) {
++  explicit SmallVector(const iterator_range<RangeTy> &R, const std::experimental::source_location &Loc = std::experimental::source_location::current())
++      : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->append(R.begin(), R.end());
+   }
+ 
+-  SmallVector(std::initializer_list<T> IL) : SmallVectorImpl<T>(N) {
++  SmallVector(std::initializer_list<T> IL, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->append(IL);
+   }
+ 
+   template <typename U,
+             typename = std::enable_if_t<std::is_convertible<U, T>::value>>
+-  explicit SmallVector(ArrayRef<U> A) : SmallVectorImpl<T>(N) {
++  explicit SmallVector(ArrayRef<U> A, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     this->append(A.begin(), A.end());
+   }
+ 
+-  SmallVector(const SmallVector &RHS) : SmallVectorImpl<T>(N) {
++  SmallVector(const SmallVector &RHS, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     if (!RHS.empty())
+       SmallVectorImpl<T>::operator=(RHS);
+   }
+@@ -1243,12 +1250,12 @@ public:
+     return *this;
+   }
+ 
+-  SmallVector(SmallVector &&RHS) : SmallVectorImpl<T>(N) {
++  SmallVector(SmallVector &&RHS, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     if (!RHS.empty())
+       SmallVectorImpl<T>::operator=(::std::move(RHS));
+   }
+ 
+-  SmallVector(SmallVectorImpl<T> &&RHS) : SmallVectorImpl<T>(N) {
++  SmallVector(SmallVectorImpl<T> &&RHS, const std::experimental::source_location &Loc = std::experimental::source_location::current()) : SmallVectorImpl<T>(N), mLoc(Loc) {
+     if (!RHS.empty())
+       SmallVectorImpl<T>::operator=(::std::move(RHS));
+   }
+diff --git a/llvm/lib/IR/IRBuilder.cpp b/llvm/lib/IR/IRBuilder.cpp
+index f340f7aafdc7..d8f8128aa84c 100644
+--- a/llvm/lib/IR/IRBuilder.cpp
++++ b/llvm/lib/IR/IRBuilder.cpp
+@@ -903,7 +903,7 @@ CallInst *IRBuilderBase::CreateIntrinsic(Type *RetTy, Intrinsic::ID ID,
+                                          const Twine &Name) {
+   Module *M = BB->getModule();
+ 
+-  SmallVector<Intrinsic::IITDescriptor> Table;
++  SmallVector<Intrinsic::IITDescriptor, 2> Table;
+   Intrinsic::getIntrinsicInfoTableEntries(ID, Table);
+   ArrayRef<Intrinsic::IITDescriptor> TableRef(Table);
+ 
+diff --git a/llvm/lib/Support/SmallVector.cpp b/llvm/lib/Support/SmallVector.cpp
+index dceea4fbc630..1071315d44ef 100644
+--- a/llvm/lib/Support/SmallVector.cpp
++++ b/llvm/lib/Support/SmallVector.cpp
+@@ -13,12 +13,18 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/Twine.h"
+ #include "llvm/Support/MemAlloc.h"
++#include "llvm/Support/CommandLine.h"
++#include <cstdio>
+ #include <cstdint>
+ #ifdef LLVM_ENABLE_EXCEPTIONS
+ #include <stdexcept>
+ #endif
+ using namespace llvm;
+ 
++cl::opt<bool> DumpSmallVectorSize(
++    "dump-small-vec-size", cl::Optional, cl::Hidden,
++    cl::desc("Show the max size of small vector"));
++
+ // Check that no bytes are wasted and everything is well-aligned.
+ namespace {
+ // These structures may cause binary compat warnings on AIX. Suppress the
+@@ -38,7 +44,7 @@ struct Struct32B {
+ #endif
+ }
+ static_assert(sizeof(SmallVector<void *, 0>) ==
+-                  sizeof(unsigned) * 2 + sizeof(void *),
++                  sizeof(unsigned) * 10 + sizeof(void *),
+               "wasted space in SmallVector size 0");
+ static_assert(alignof(SmallVector<Struct16B, 0>) >= alignof(Struct16B),
+               "wrong alignment for 16-byte aligned T");
+@@ -49,11 +55,11 @@ static_assert(sizeof(SmallVector<Struct16B, 0>) >= alignof(Struct16B),
+ static_assert(sizeof(SmallVector<Struct32B, 0>) >= alignof(Struct32B),
+               "missing padding for 32-byte aligned T");
+ static_assert(sizeof(SmallVector<void *, 1>) ==
+-                  sizeof(unsigned) * 2 + sizeof(void *) * 2,
++                  sizeof(unsigned) * 10 + sizeof(void *) * 2,
+               "wasted space in SmallVector size 1");
+ 
+ static_assert(sizeof(SmallVector<char, 0>) ==
+-                  sizeof(void *) * 2 + sizeof(void *),
++                  sizeof(void *) * 6 + sizeof(void *),
+               "1 byte elements have word-sized type for size and capacity");
+ 
+ /// Report that MinSize doesn't fit into this vector's size type. Throws
+@@ -164,6 +170,16 @@ void SmallVectorBase<Size_T>::grow_pod(void *FirstEl, size_t MinSize,
+   this->set_allocation_range(NewElts, NewCapacity);
+ }
+ 
++namespace llvm {
++void destorySmallVector(unsigned MaxSize, unsigned N, unsigned Line, const char * FileName) {
++  if (DumpSmallVectorSize) {
++    if (!StringRef{FileName}.contains("lib/Transforms") && !StringRef{FileName}.contains("lib/Analysis"))
++      return;
++    fprintf(stderr, "SmallVec %u %s:%u %u\n", MaxSize, FileName, Line, N);
++  }
++}
++}
++
+ template class llvm::SmallVectorBase<uint32_t>;
+ 
+ // Disable the uint64_t instantiation for 32-bit builds.
