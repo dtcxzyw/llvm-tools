@@ -3,7 +3,7 @@ import numpy
 from matplotlib import pyplot as plt
 
 prefix = "/home/dtcxzyw/WorkSpace/Projects/compilers/llvm-project/"
-threshold = 10000
+threshold = 1000000
 with open('build/smallvec_dist.json', 'r') as f:
     dist = json.load(f)
 
@@ -37,7 +37,7 @@ for k, v in dist.items():
     p0 = arr[default]/cnt_sum*100
     p1 = arr[min(dest, len(arr) - 1)]/cnt_sum*100
     key = k[:k.find('.cpp')]
-    adv = (k, default, p0, dest, p1)
+    adv = (k, default, p0, dest, p1, cnt_sum)
     if key in advs:
         advs[key].append(adv)
     else:
@@ -56,4 +56,4 @@ for k, v in dist.items():
 for key, val in advs.items():
     val.sort(key=lambda x: x[4]/max(0.001,x[2]))
     for v in val:
-        print(f"{v[0]}(p = {v[2]:.2f}) suggested size {v[3]}(p = {v[4]:.2f})")
+        print(f"{v[0]}(p = {v[2]:.2f}) suggested size {v[3]}(p = {v[4]:.2f}) samples = {v[5]}")

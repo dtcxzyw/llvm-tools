@@ -18,7 +18,7 @@ for r,ds,fs in os.walk(path):
         if f.endswith('.ll'):
             test_file = os.path.join(r,f)
             work_list.append(test_file)
-work_list = work_list[:100]
+# work_list = work_list[:1000]
 
 def extract_dist(err: str):
     dist = dict()
@@ -42,7 +42,7 @@ def verify(test_file):
             dist = extract_dist(err)
             return (test_file, dist)
         # print(ret.returncode)
-        return (test_file, None)
+        return (test_file, "error")
     except subprocess.TimeoutExpired:
         return (test_file, "timeout")
     except Exception as e:
