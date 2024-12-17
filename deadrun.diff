@@ -1,0 +1,36 @@
+diff --git a/llvm/lib/Passes/StandardInstrumentations.cpp b/llvm/lib/Passes/StandardInstrumentations.cpp
+index 6259f8f736c8..bd751b81d0b2 100644
+--- a/llvm/lib/Passes/StandardInstrumentations.cpp
++++ b/llvm/lib/Passes/StandardInstrumentations.cpp
+@@ -2699,6 +2699,31 @@ bool DroppedVariableStats::isInlinedAtChildOfOrEqualTo(
+ 
+ void StandardInstrumentations::registerCallbacks(
+     PassInstrumentationCallbacks &PIC, ModuleAnalysisManager *MAM) {
++  PIC.registerBeforeNonSkippedPassCallback(
++      [&](StringRef PassID, Any IR) {
++    auto *F = unwrapIR<Function>(IR);
++    if (F) {
++      F->removeDeadConstantUsers();
++      if (F->isDefTriviallyDead() && !F->hasComdat()) {
++        errs() << "Dead run " << F->getName() << "\n";
++      }
++    }
++  });
++  PIC.registerAfterPassCallback([&](StringRef PassID, Any IR,
++                                    const PreservedAnalyses &PA) {
++    auto *M = unwrapModule(IR, /*Force=*/true);
++    // errs() << "Handling " << PassID << '\n';
++
++    for (auto &F: *M) {
++      if (F.isDeclaration())
++        continue;
++      F.removeDeadConstantUsers();
++      if (F.isDefTriviallyDead() && !F.hasComdat()) {
++        errs() << "Dead func " << F.getName() << " " << PassID
++              << "\n";
++      }
++    }
++  });
+   PrintIR.registerCallbacks(PIC);
+   PrintPass.registerCallbacks(PIC);
+   TimePasses.registerCallbacks(PIC);
