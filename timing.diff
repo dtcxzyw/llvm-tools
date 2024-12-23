@@ -1,0 +1,15 @@
+diff --git a/llvm/lib/Support/Timer.cpp b/llvm/lib/Support/Timer.cpp
+index 634f27f57b00..71b01eba19b1 100644
+--- a/llvm/lib/Support/Timer.cpp
++++ b/llvm/lib/Support/Timer.cpp
+@@ -359,6 +359,10 @@ void TimerGroup::PrintQueuedTimers(raw_ostream &OS) {
+   if (*SortTimers)
+     llvm::sort(TimersToPrint);
+ 
++  for (const PrintRecord &Record : llvm::reverse(TimersToPrint))
++    errs() << "@Time " << Record.Time.getUserTime() << ' ' << Record.Description << '\n';
++  return;
++
+   TimeRecord Total;
+   for (const PrintRecord &Record : TimersToPrint)
+     Total += Record.Time;
