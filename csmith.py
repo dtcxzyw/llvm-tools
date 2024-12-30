@@ -10,7 +10,7 @@ import tqdm
 import datetime
 
 csmith_dir = "/home/dtcxzyw/WorkSpace/Projects/compilers/csmith/install/"
-qemu_command = '/home/dtcxzyw/WorkSpace/Projects/compilers/tmp/qemu-install/bin/qemu-riscv64 -L /usr/riscv64-linux-gnu -cpu rv64,zicldst=true,zicond=true'.split()
+qemu_command = '/home/dtcxzyw/WorkSpace/Projects/compilers/tmp/qemu-install/bin/qemu-riscv64 -L /usr/riscv64-linux-gnu -cpu rv64,zba=true,zbb=true,zbs=true,zbkb=true,zicond=true'.split()
 test_count = int(sys.argv[1])
 csmith_ext = ""
 csmith_command = csmith_dir +"/bin/csmith --max-funcs 3 --max-block-depth 5 --quiet --builtins --no-packed-struct --no-unions --no-bitfields --no-volatiles --no-volatile-pointers {}--output ".format(
@@ -19,7 +19,8 @@ common_opts = "-Wno-narrowing -DNDEBUG -g0 -ffp-contract=on -w -I" + csmith_dir 
 gcc_command = "clang -O0 " + common_opts
 clang_command = "/home/dtcxzyw/WorkSpace/Projects/compilers/LLVM/llvm-build/bin/clang -O3 --target=riscv64-linux-gnu " + common_opts
 clang_arch_list = [
-"rv64gc_zicldst_zicond",
+# "rv64gc_zicldst_zicond",
+"rv64gc_zba_zicond",
 ]
 exec_timeout = 6.0
 exec_qemu_timeout = 30.0
