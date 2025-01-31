@@ -24,11 +24,20 @@ for file in patch:
     for hunk in file:
         added = dict()
         removed = dict()
+        src_lineno = 0
+        tgt_lineno = 0
         for line in hunk:
             if line.is_added:
-                added[line.target_line_no - hunk.target_start] = line.value
+                added[tgt_lineno] = line.value
+                tgt_lineno += 1
             if line.is_removed:
-                removed[line.source_line_no - hunk.source_start] = line.value
+                removed[src_lineno] = line.value
+                src_lineno += 1
+            if line.is_context:
+                src_lineno = tgt_lineno = max(src_lineno, tgt_lineno) + 1
+        print("===================")
+        print(added)
+        print(removed)
         for k, v in added.items():
             if k in removed:
                 a = extract_name(removed[k].strip())
@@ -38,3 +47,5 @@ for file in patch:
                         mapping[b[1]] = {a[1]}
                     else:
                         mapping[b[1]].add(a[1])
+    print(file.source_file, mapping)
+    exit(0)
