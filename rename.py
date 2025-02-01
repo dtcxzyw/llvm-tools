@@ -20,6 +20,8 @@ def extract_name(line):
 
 
 for file in patch:
+    if "bench/gromacs/optimized/md5.c.ll" not in file.source_file:
+        continue
     mapping = dict()
     for hunk in file:
         added = dict()
