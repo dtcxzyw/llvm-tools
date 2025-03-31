@@ -8,74 +8,57 @@ client = OpenAI(api_key=token, base_url="https://api.deepseek.com")
 # patch = requests.get(f"https://github.com/llvm/llvm-project/pull/{pr_id}.diff").text
 
 PROMPT = """
+You are a senior LLVM maintainer.
 Condider the following LLVM IR:
 ```
-define i32 @widget() {
-b:
-  br label %b1
+define i1 @test(i16 %n) {
+entry:
+  %cond = icmp slt i16 %n, 1
+  br i1 %cond, label %exit, label %loop.preheader
 
-b1:                                              ; preds = %b5, %b
-  %phi = phi i32 [ 0, %b ], [ %udiv6, %b5 ]
-  %phi2 = phi i32 [ 1, %b ], [ %add, %b5 ]
-  %icmp = icmp eq i32 %phi, 0
-  br i1 %icmp, label %b3, label %b8
+loop.preheader:
+  %sub = add nsw i16 %n, -1
+  %ext = zext nneg i16 %sub to i32
+  br label %loop
 
-b3:                                              ; preds = %b1
-  %udiv = udiv i32 10, %phi2
-  %urem = urem i32 %udiv, 10
-  %icmp4 = icmp eq i32 %urem, 0
-  br i1 %icmp4, label %b7, label %b5
+loop:
+  %indvar = phi i32 [ %indvar.inc, %loop.latch ], [ 0, %loop.preheader ]
+  %12 = icmp eq i32 %indvar, %ext
+  br i1 %12, label %exit, label %loop.latch
 
-b5:                                              ; preds = %b3
-  %udiv6 = udiv i32 %phi2, 0
-  %add = add i32 %phi2, 1
-  br label %b1
+loop.latch:
+  %indvar.inc = add nuw nsw i32 %indvar, 1
+  br label %loop
 
-b7:                                              ; preds = %b3
-  ret i32 5
-
-b8:                                              ; preds = %b1
-  ret i32 7
+exit:
+  %cmp = icmp sgt i16 %n, 0
+  ret i1 %cmp
 }
 ```
 
-Please check the following SCEV expressions. Are they all correct? If not, please tell me which one is incorrect and why.
+Is `%indvar ule %ext` a valid dominating condition for the context instruction `%cmp = icmp sgt i16 %n, 0`?
 
-%phi2 = phi i32 [ 1, %b ], [ %add, %b5 ] --> {1,+,1}<%b1>
-%udiv6 = udiv i32 %phi2, 0 --> ({1,+,1}<%b1> /u 0)
-%phi = phi i32 [ 0, %b ], [ %udiv6, %b5 ] --> ({0,+,1}<%b1> /u 0)
-
-Hint:
-```cpp
-// Otherwise, this could be a loop like this:
-//     i = 0;  for (j = 1; ..; ++j) { ....  i = j; }
-// In this case, j = {1,+,1}  and BEValue is j.
-// Because the other in-value of i (0) fits the evolution of BEValue
-// i really is an addrec evolution.
-//
-// We can generalize this saying that i is the shifted value of BEValue
-// by one iteration:
-//   PHI(f(0), f({1,+,1})) --> f({0,+,1})
-
-// Do not allow refinement in rewriting of BEValue.
-const SCEV *Shifted = SCEVShiftRewriter::rewrite(BEValue, L, *this);
-const SCEV *Start = SCEVInitRewriter::rewrite(Shifted, L, *this, false);
-if (Shifted != getCouldNotCompute() && Start != getCouldNotCompute() &&
-    isGuaranteedNotToCauseUB(Shifted) && ::impliesPoison(Shifted, Start)) {
-    const SCEV *StartVal = getSCEV(StartValueV);
-    if (Start == StartVal) {
-    // Okay, for the entire analysis of this edge we assumed the PHI
-    // to be symbolic.  We now need to go back and purge all of the
-    // entries for the scalars that use the symbolic expression.
-    forgetMemoizedResults(SymbolicName);
-    insertValueToMap(PN, Shifted);
-    return Shifted;
-    }
-}
+This condition is added by the following code snippet in the ConstraintElimination pass:
 ```
+  // Try to add condition from header to the exit blocks. When exiting either
+  // with EQ or NE in the header, we know that the induction value must be u<=
+  // B, as other exits may only exit earlier.
+  assert(!StepOffset.isNegative() && "induction must be increasing");
+  assert((Pred == CmpInst::ICMP_EQ || Pred == CmpInst::ICMP_NE) &&
+         "unsupported predicate");
+  ConditionTy Precond = {CmpInst::ICMP_ULE, StartValue, B};
+  SmallVector<BasicBlock *> ExitBBs;
+  L->getExitBlocks(ExitBBs);
+  for (BasicBlock *EB : ExitBBs) {
+    WorkList.emplace_back(FactOrCheck::getConditionFact(
+        DT.getNode(EB), CmpInst::ICMP_ULE, A, B, Precond));
+  }
+```
+
+If not, please explain why and tell me what should we check on EB to make sure that this optimization is valid.
 """
 
-response = client.chat.completions.create(
+completion = client.chat.completions.create(
     model="deepseek-reasoner",
     messages=[
         {"role": "system", "content": "You are a senior LLVM maintainer."},
@@ -93,10 +76,22 @@ response = client.chat.completions.create(
         # {"role": "user", "content": f"Please make three short, concrete and targeted suggestions on the following patch. Don't output in Markdown format. Patch:\n{patch}"},
         {"role": "user", "content": PROMPT},
     ],
-    stream=False,
+    stream=True,
     seed=19260817,
     timeout=60,
 )
+is_thinking = False
+for chunk in completion:
+    delta = chunk.choices[0].delta
+    if hasattr(delta, "reasoning_content") and delta.reasoning_content != None:
+        if not is_thinking:
+            print("Thinking:")
+            is_thinking = True
+        print(delta.reasoning_content, end="", flush=True)
+    else:
+        if delta.content is not None:
+            print(delta.content, end="", flush=True)
+print("")
 
-print(response.choices[0].message.reasoning_content)
-print(response.choices[0].message.content)
+# print(response.choices[0].message.reasoning_content)
+# print(response.choices[0].message.content)
