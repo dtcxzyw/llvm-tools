@@ -23,7 +23,7 @@ common_opts = (
 )
 gcc_command = "clang -O0 " + common_opts
 clang_command = (
-    "/home/dtcxzyw/WorkSpace/Projects/compilers/LLVM/llvm-build/bin/clang -fsanitize=undefined -O3 -mllvm -inline-threshold=100000 "
+    "/home/dtcxzyw/WorkSpace/Projects/compilers/LLVM/llvm-build/bin/clang -O3 -mllvm -inline-threshold=100000 "
     + common_opts
 )
 exec_timeout = 6.0
