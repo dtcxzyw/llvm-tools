@@ -109,12 +109,28 @@ int main(int argc, char **argv) {
       for (auto &BB : F) {
         auto *Terminator = BB.getTerminator();
         if (isa<ReturnInst>(Terminator)) {
-          if (auto *Call = dyn_cast<CallInst>(Terminator->getOperand(0))) {
-            auto *Callee = Call->getCalledFunction();
+          auto HandleSelfCall = [&](Value *X) {
+            if (auto *Call = dyn_cast<CallInst>(X)) {
+              auto *Callee = Call->getCalledFunction();
 
-            if (Callee == &F) {
-              SelfRecursionCount++;
+              if (Callee == &F) {
+                SelfRecursionCount++;
+              }
             }
+          };
+
+          auto *Ret = Terminator->getOperand(0);
+          HandleSelfCall(Ret);
+
+          Value *LHS, *RHS;
+          if (match(Ret, m_BinOp(m_Value(LHS), m_Value(RHS)))) {
+            HandleSelfCall(LHS);
+            HandleSelfCall(RHS);
+          }
+
+          if (match(Ret, m_MaxOrMin(m_Value(LHS), m_Value(RHS)))) {
+            HandleSelfCall(LHS);
+            HandleSelfCall(RHS);
           }
         }
       }

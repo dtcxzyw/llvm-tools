@@ -101,13 +101,13 @@ int main(int argc, char **argv) {
                     Op.set(Cache.at(PredBB));
                   } else {
                     auto *Inst = CE->getAsInstruction();
-                    Inst->insertBefore(PredBB->getTerminator());
+                    Inst->insertBefore(PredBB->getTerminator()->getIterator());
                     Cache.insert({PredBB, Inst});
                     Op.set(Inst);
                   }
                 } else {
                   auto *Inst = CE->getAsInstruction();
-                  Inst->insertBefore(&I);
+                  Inst->insertBefore(I.getIterator());
                   Op.set(Inst);
                 }
                 Changed = true;
