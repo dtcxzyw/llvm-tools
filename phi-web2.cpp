@@ -3,6 +3,8 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/Analysis/CmpInstAnalysis.h>
 #include <llvm/Analysis/ConstantFolding.h>
@@ -56,41 +58,25 @@ static cl::opt<std::string>
     InputDir(cl::Positional, cl::desc("<directory for input LLVM IR files>"),
              cl::Required, cl::value_desc("inputdir"));
 
-using NodeIndex = uint32_t;
-using Graph = std::vector<std::vector<NodeIndex>>;
-
-std::pair<NodeIndex, std::vector<NodeIndex>> calcSCC(const Graph &graph) {
-  const auto size = graph.size();
-  std::vector<NodeIndex> dfn(size), low(size), st(size), col(size);
-  NodeIndex top = 0, ccnt = 0, icnt = 0;
-  std::vector<bool> flag(size);
-  const auto dfs = [&](auto &&self, NodeIndex u) -> void {
-    dfn[u] = low[u] = ++icnt;
-    flag[u] = true;
-    st[top++] = u;
-    for (auto v : graph[u]) {
-      if (dfn[v]) {
-        if (flag[v])
-          low[u] = std::min(low[u], dfn[v]);
+static uint32_t visitPHI(PHINode *Root) {
+  Value *CommonV = nullptr;
+  SmallVector<PHINode *> WorkList({Root});
+  SmallPtrSet<PHINode *, 16> Visited;
+  while (!WorkList.empty()) {
+    auto *PHI = WorkList.pop_back_val();
+    for (auto &V : PHI->incoming_values()) {
+      if (auto *PN = dyn_cast<PHINode>(V)) {
+        if (Visited.insert(PN).second)
+          WorkList.push_back(PN);
       } else {
-        self(self, v);
-        low[u] = std::min(low[u], low[v]);
+        if (CommonV == nullptr)
+          CommonV = V.get();
+        else if (CommonV != V.get())
+          return 0;
       }
     }
-    if (dfn[u] == low[u]) {
-      NodeIndex c = ccnt++, v;
-      do {
-        v = st[--top];
-        flag[v] = false;
-        col[v] = c;
-      } while (u != v);
-    }
-  };
-
-  for (NodeIndex i = 0; i < size; ++i)
-    if (!dfn[i])
-      dfs(dfs, i);
-  return {ccnt, std::move(col)};
+  }
+  return Visited.size();
 }
 
 int main(int argc, char **argv) {
@@ -136,73 +122,11 @@ int main(int argc, char **argv) {
       if (F.empty())
         continue;
 
-      std::unordered_map<PHINode *, uint32_t> PHIs;
-      std::vector<PHINode *> PHIList;
-      uint32_t PhiCount = 0;
       for (auto &BB : F)
-        for (auto &I : BB.phis()) {
-          PHIs[&I] = PhiCount++;
-          PHIList.push_back(&I);
-        }
-
-      Graph G;
-      G.resize(PhiCount);
-      for (auto &BB : F)
-        for (auto &I : BB.phis()) {
-          auto IdxU = PHIs.at(&I);
-          for (auto &V : I.incoming_values()) {
-            if (auto *PN = dyn_cast<PHINode>(V)) {
-              auto IdxV = PHIs.at(PN);
-              if (IdxU != IdxV)
-                G[IdxU].push_back(IdxV);
-            }
-          }
-        }
-
-      auto [CCnt, Col] = calcSCC(G);
-      std::vector<std::vector<PHINode *>> SCC(CCnt);
-      for (auto &I : PHIList) {
-        auto Idx = PHIs.at(I);
-        auto CIdx = Col[Idx];
-        SCC[CIdx].push_back(I);
-      }
-      uint32_t CIdx = 0;
-      for (auto &C : SCC) {
-        if (C.size() < 2)
-          continue;
-
-        Value *CommonV = nullptr;
-        bool Valid = true;
-        for (auto *PHI : C) {
-          for (auto &V : PHI->incoming_values()) {
-            if (auto *PN = dyn_cast<PHINode>(V)) {
-              auto IdxV = PHIs.at(PN);
-              if (Col[IdxV] == CIdx)
-                continue;
-            }
-            if (CommonV == nullptr)
-              CommonV = V.get();
-            else if (CommonV != V.get()) {
-              Valid = false;
-              break;
-            }
-          }
-        }
-        ++CIdx;
-
-        if (Valid) {
-          // if (C.size() == 2) {
-          //   C[0]->dump();
-          //   C[1]->dump();
-          //   if (CommonV)
-          //     CommonV->dump();
-          //   return 0;
-          // }
-          Dist[C.size()]++;
-        }
-      }
+        for (auto &PHI : BB.phis())
+          if (auto C = visitPHI(&PHI))
+            Dist[C]++;
     }
-
     errs() << "\rProgress: " << ++Count;
   }
   errs() << '\n';
