@@ -561,7 +561,7 @@ static void visitFunc(Function &F, Module &NewM) {
     if (!BI || BI->isUnconditional())
       continue;
     DC.registerBranch(BI);
-    auto Q = SQ.getWithInstruction(BB->getFirstNonPHI());
+    auto Q = SQ.getWithInstruction(&*BB->getFirstNonPHIIt());
     // if (auto *Cond = dyn_cast<Instruction>(BI->getCondition())) {
     //   // if (InterestingBBs.count(BI->getSuccessor(0)))
     //   AddEdge(BI, /*IsCondTrue=*/true, Q);
