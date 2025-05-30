@@ -3,9 +3,9 @@
 // This file is licensed under the MIT License.
 // See the LICENSE file for more information.
 
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SmallVector.h"
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/CmpInstAnalysis.h>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/Analysis/LoopInfo.h>
