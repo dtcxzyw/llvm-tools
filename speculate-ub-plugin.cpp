@@ -41,13 +41,13 @@ public:
   explicit RankVisitor(uint32_t &R) : Rank(R) {}
 
   void visitIntToPtrInst(IntToPtrInst &I) {
-    if (match(I.getOperand(0), m_Zero()))
-      ++Rank;
+    // if (match(I.getOperand(0), m_Zero()))
+    //   ++Rank;
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
-    if (I.isInBounds() && isa<ConstantPointerNull>(I.getPointerOperand()))
-      ++Rank;
+    // if (I.isInBounds() && isa<ConstantPointerNull>(I.getPointerOperand()))
+    //   ++Rank;
   }
 
   void visitBranchInst(BranchInst &I) {
@@ -87,12 +87,12 @@ public:
   void visitStoreInst(StoreInst &I) {
     if (isa<ConstantPointerNull>(I.getPointerOperand()))
       ++Rank;
-    if (isa<UndefValue>(I.getValueOperand()))
-      ++Rank;
+    // if (isa<UndefValue>(I.getValueOperand()))
+    //   ++Rank;
   }
   void visitSubInst(BinaryOperator &I) {
-    if (match(I.getOperand(0), m_Zero()) && I.hasNoUnsignedWrap())
-      ++Rank;
+    // if (match(I.getOperand(0), m_Zero()) && I.hasNoUnsignedWrap())
+    //   ++Rank;
   }
 
   void visitCallBase(CallBase &I) {
@@ -153,14 +153,14 @@ static uint32_t getUBRank(const Function &F) {
     for (auto &I : BB) {
       uint32_t OldRank = Rank;
       // poison values
-      for (auto &Op : I.operands()) {
-        if (isa<PoisonValue>(Op) && propagatesPoison(Op))
-          ++Rank;
-      }
+      // for (auto &Op : I.operands()) {
+      //   if (isa<PoisonValue>(Op) && propagatesPoison(Op))
+      //     ++Rank;
+      // }
 
       RV.visit(const_cast<Instruction &>(I));
       if (OldRank != Rank) {
-        // errs() << I << '\n';
+        errs() << I << '\n';
       }
     }
   return Rank;
