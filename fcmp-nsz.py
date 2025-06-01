@@ -22,11 +22,11 @@ for r, ds, fs in os.walk(path):
 work_list = list(enumerate(work_list))
 
 
-def drop_nsz(src: str):
+def drop_nsz(src: str, drop_all: bool = False):
     lines = src.splitlines()
     new_lines = []
     for line in lines:
-        if " = fcmp " in line:
+        if " = fcmp " in line or drop_all:
             line = line.replace(" nsz ", " ")
         new_lines.append(line)
     return "\n".join(new_lines)
@@ -62,8 +62,8 @@ def verify(task):
             timeout=10.0,
             input=content_with_nsz.encode(),
         ).decode()
-        opt_without_nsz = drop_nsz(opt_without_nsz)
-        opt_with_nsz = drop_nsz(opt_with_nsz)
+        opt_without_nsz = drop_nsz(opt_without_nsz, True)
+        opt_with_nsz = drop_nsz(opt_with_nsz, True)
         base_path = os.path.join(
             "report_dir", str(idx) + "_" + os.path.basename(test_file)
         )
