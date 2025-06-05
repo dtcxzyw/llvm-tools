@@ -121,3 +121,38 @@ I haven't implemented a prototype yet. If you think this RFC is pratical and the
 14. ctgrind. https://github.com/agl/ctgrind
 
 15. as-if rule: https://cppreference.com/w/cpp/language/as_if.html
+
+
+Reply:
+
+Thank you for your feedback! I agree that a prototype is essential to validate the feasibility of this proposal. I will start working on it and share my implementation experience.
+
+> I don’t see how this is feasible without major work requiring multiple people. Most optimizations would need to be changed.
+Most instruction movements, foldings, etc, could potentially be wrong.
+Imagine you have a if-then-else. InstSimplify wants to simplify something in one branch. Oops, wrong optimization because the other branch was not simplified and now it’s not constant time anymore.
+
+This proposal only focuses on preventing optimizers from introducing non-constant-time operations in "constant-time code". In your counterexample, if the optimizer breaks the constant-time guarantee, it implies that the original IR branches on a "secret" condition. That is the responsibility of library developers.
+
+> I would be mostly concerned that it would be difficult to ensure this works reliably. Every transform would be forced to dance around this in what should otherwise be straightforward code. And we’d inevitably screw this up, so nobody would trust it.
+
+I would expect that the maintainance burden is limited to the same level as coroutines/convergence. I saw many optimizations bail out on functions with `convergent/presplitcoroutine`.
+
+> Applying the attribute function-wide could also make it difficult to write performant code in some cases: on targets where mul isn’t constant-time, we really don’t want to use a constant-time mul replacement for address arithmetic.
+
+Scalar multiplication is always assumed to be constant-time (e.g., RISC-V Zkt). If not, an error diagnostic should be emitted.
+For performance degradation caused by making address arithmetic constant-time, I need a prototype to evaluate the impact.
+
+> If the proposal was to add, for example, llvm.constanttime.add, I would be less skeptical: that’s an intrinsic with specific semantics, which almost all transforms would naturally preserve. But you can already basically do that using inline asm, so I’m not sure how useful that is.
+> An approach that uses a separate set of constant-time intrinsics would be a lot more robust, as we’d be starting from a clean slate in terms of optimizations.
+
+Hmm... If we cannot reuse existing optimizations, it looks like we are rewriting a new compiler. It has achieved by using "value barriers".
+
+> Do we need other mitigations for functions containing “constant-time” operations, to deal with issues with speculative execution? I think I remember reading about that somewhere…
+> It’s probably worth mentioning that next to constant-time guarantees, there is also another concern around compiler-introduced copies of secrets (e.g. secrets spilled on the stack and not zeroed out subsequently).
+
+Good point. I also mentioned that conditional loads may be a problem. But I would like to focus on avoiding branches on "secret" conditions first.
+
+> I agree that a function-level attribute is not a good way to model this. Both because it is very coarse-grained (even in cryptographic code, not all values are secrets) and because all optimizations are going to be wrong by default.
+
+IMO introducing "secrets" to LLVM is too heavy. It is the business of static/dynamic(taint) analysis tools.
+The current proposal propagates the attribute after function inlining, so it may introduce unnecessary constraints on some innocent callers. That is a trade-off between maintainability and performance.
