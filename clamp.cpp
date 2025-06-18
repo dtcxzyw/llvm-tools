@@ -72,6 +72,8 @@ int main(int argc, char **argv) {
             Blocked = true;
             break;
           }
+        if (Path.string().find("/distance.ll") == std::string::npos)
+          continue;
         if (!Blocked)
           InputFiles.push_back(Path);
       }
@@ -103,13 +105,18 @@ int main(int argc, char **argv) {
                               m_FMaxNum(m_Deferred(X), m_APFloat(FC2))),
                   m_CombineOr(m_FMinimum(m_Deferred(X), m_APFloat(FC2)),
                               m_FMaximum(m_Deferred(X), m_APFloat(FC2)))),
-              m_CombineOr(m_FMinimumNum(m_Deferred(X), m_APFloat(FC2)),
-                          m_FMaximumNum(m_Deferred(X), m_APFloat(FC2))));
+              m_CombineOr(
+                  m_CombineOr(m_FMinimumNum(m_Deferred(X), m_APFloat(FC2)),
+                              m_FMaximumNum(m_Deferred(X), m_APFloat(FC2))),
+                  m_CombineOr(
+                      m_OrdOrUnordFMin(m_Deferred(X), m_APFloat(FC2)),
+                      m_OrdOrUnordFMax(m_Deferred(X), m_APFloat(FC2)))));
           if (match(&I, m_Select(m_FCmp(Pred, m_Value(X), m_APFloat(FC1)),
                                  MaxMin, m_APFloat(FC3))) ||
               match(&I, m_Select(m_FCmp(Pred, m_Value(X), m_APFloat(FC1)),
                                  m_APFloat(FC3), MaxMin))) {
             if (FC1->bitwiseIsEqual(*FC3)) {
+              errs() << I << '\n';
               Interesting.insert(
                   fs::relative(fs::absolute(Path), InputDir.c_str()).string());
               break;
