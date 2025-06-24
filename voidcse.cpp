@@ -92,7 +92,8 @@ int main(int argc, char **argv) {
       if (F.empty())
         continue;
 
-      if (F.getMemoryEffects().onlyReadsMemory() &&
+      if (F.getReturnType()->isVoidTy() &&
+          F.getMemoryEffects().onlyReadsMemory() &&
           !(F.hasFnAttribute(Attribute::NoUnwind) &&
             F.hasFnAttribute(Attribute::WillReturn))) {
         errs() << F.getName() << '\n';
