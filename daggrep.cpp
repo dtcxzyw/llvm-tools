@@ -376,7 +376,6 @@ struct Worker final {
   explicit Worker(Shared &SharedDataRef)
       : SharedData(SharedDataRef),
         Thread(std::jthread([this](std::stop_token StopToken) {
-          try {
             LLVMContext Context;
             SMDiagnostic Err;
             auto Pattern = parseIRFile(PatternFile, Err, Context);
@@ -411,9 +410,6 @@ struct Worker final {
               }
               SharedData.TaskCount--;
             }
-          } catch (const std::exception &ex) {
-            errs() << ex.what() << '\n';
-          }
         })) {}
 };
 

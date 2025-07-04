@@ -519,21 +519,21 @@ static void visitFunc(Function &F, Module &NewM) {
       //   extractCond(Cmp, true, NewM, Q);
       //   Cmp->eraseFromParent();
       // }
-      auto HandleOverflow = [&](Intrinsic::ID IID, Value *X, Value *Y,
-                                IntrinsicInst *II) {
-        if (X->getType()->isVectorTy())
-          return;
-        assert(IID == II->getIntrinsicID());
-        auto *Overflow = ExtractValueInst::Create(
-            II, 1, "", II->getNextNode()->getIterator());
-        extractCond(Overflow, /*IsCondTrue=*/false, NewM,
-                    SQ.getWithInstruction(Overflow));
-        Overflow->eraseFromParent();
-      };
-      if (auto *II = dyn_cast<WithOverflowInst>(&I)) {
-        HandleOverflow(II->getIntrinsicID(), II->getArgOperand(0),
-                       II->getArgOperand(1), II);
-      }
+      // auto HandleOverflow = [&](Intrinsic::ID IID, Value *X, Value *Y,
+      //                           IntrinsicInst *II) {
+      //   if (X->getType()->isVectorTy())
+      //     return;
+      //   assert(IID == II->getIntrinsicID());
+      //   auto *Overflow = ExtractValueInst::Create(
+      //       II, 1, "", II->getNextNode()->getIterator());
+      //   extractCond(Overflow, /*IsCondTrue=*/false, NewM,
+      //               SQ.getWithInstruction(Overflow));
+      //   Overflow->eraseFromParent();
+      // };
+      // if (auto *II = dyn_cast<WithOverflowInst>(&I)) {
+      //   HandleOverflow(II->getIntrinsicID(), II->getArgOperand(0),
+      //                  II->getArgOperand(1), II);
+      // }
       // if (auto *II = dyn_cast<SaturatingInst>(&I)) {
       //   Intrinsic::ID IID = Intrinsic::not_intrinsic;
       //   switch (II->getIntrinsicID()) {
@@ -555,6 +555,29 @@ static void visitFunc(Function &F, Module &NewM) {
       //   if (IID != Intrinsic::not_intrinsic)
       //     HandleOverflow(IID, II->getArgOperand(0), II->getArgOperand(1));
       // }
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        if (GEP->hasNoUnsignedWrap() || !GEP->hasNoUnsignedSignedWrap())
+          continue;
+        SmallVector<Value *, 4> Indices;
+        for (auto &Val: GEP->indices()) {
+          if (isKnownNonNegative(Val, SQ))
+            continue;
+          Indices.push_back(Val);
+          if (Indices.size() > 1)
+            break;
+        }
+
+        if (Indices.size() != 1) 
+          continue;
+        
+        auto *Idx = Indices[0];
+        if (!Idx->getType()->isIntegerTy())
+          continue;
+        auto *Cmp = new ICmpInst(GEP->getNextNode()->getIterator(),ICmpInst::ICMP_SGT, Idx, Constant::getAllOnesValue(Idx->getType()));
+        extractCond(Cmp, /*IsCondTrue=*/true, NewM,
+                    SQ.getWithInstruction(GEP));
+        Cmp->eraseFromParent();
+      }
     }
 
     auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
