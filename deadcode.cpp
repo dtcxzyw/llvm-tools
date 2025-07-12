@@ -499,10 +499,10 @@ static void visitFunc(Function &F, Module &NewM) {
   SQ.DC = &DC;
   ReversePostOrderTraversal<Function *> RPOT(&F);
 
-  DenseSet<BasicBlock *> InterestingBBs;
-  for (auto &BB : F)
-    if (isLikelyToBeDead(BB))
-      InterestingBBs.insert(&BB);
+  // DenseSet<BasicBlock *> InterestingBBs;
+  // for (auto &BB : F)
+  //   if (isLikelyToBeDead(BB))
+  //     InterestingBBs.insert(&BB);
 
   for (auto *BB : RPOT) {
     for (auto &I : make_early_inc_range(*BB)) {
@@ -555,28 +555,39 @@ static void visitFunc(Function &F, Module &NewM) {
       //   if (IID != Intrinsic::not_intrinsic)
       //     HandleOverflow(IID, II->getArgOperand(0), II->getArgOperand(1));
       // }
-      if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-        if (GEP->hasNoUnsignedWrap() || !GEP->hasNoUnsignedSignedWrap())
-          continue;
-        SmallVector<Value *, 4> Indices;
-        for (auto &Val: GEP->indices()) {
-          if (isKnownNonNegative(Val, SQ))
-            continue;
-          Indices.push_back(Val);
-          if (Indices.size() > 1)
-            break;
-        }
+      // if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+      //   if (GEP->hasNoUnsignedWrap() || !GEP->hasNoUnsignedSignedWrap())
+      //     continue;
+      //   SmallVector<Value *, 4> Indices;
+      //   for (auto &Val: GEP->indices()) {
+      //     if (isKnownNonNegative(Val, SQ))
+      //       continue;
+      //     Indices.push_back(Val);
+      //     if (Indices.size() > 1)
+      //       break;
+      //   }
 
-        if (Indices.size() != 1) 
-          continue;
+      //   if (Indices.size() != 1) 
+      //     continue;
         
-        auto *Idx = Indices[0];
-        if (!Idx->getType()->isIntegerTy())
-          continue;
-        auto *Cmp = new ICmpInst(GEP->getNextNode()->getIterator(),ICmpInst::ICMP_SGT, Idx, Constant::getAllOnesValue(Idx->getType()));
+      //   auto *Idx = Indices[0];
+      //   if (!Idx->getType()->isIntegerTy())
+      //     continue;
+      //   auto *Cmp = new ICmpInst(GEP->getNextNode()->getIterator(),ICmpInst::ICMP_SGT, Idx, Constant::getAllOnesValue(Idx->getType()));
+      //   extractCond(Cmp, /*IsCondTrue=*/true, NewM,
+      //               SQ.getWithInstruction(GEP));
+      //   Cmp->eraseFromParent();
+      // }
+      Value *X;
+      const APInt *C;
+      if (match(&I, m_And(m_Value(X), m_APInt(C))) && !I.getType()->isIntegerTy(1) && I.getType()->isIntegerTy()) {
+        auto *And = BinaryOperator::CreateAnd(X, ConstantInt::get(X->getType(), ~*C),
+                                              "", I.getIterator());
+        auto *Cmp = new ICmpInst(I.getNextNode()->getIterator(),ICmpInst::ICMP_EQ, And, ConstantInt::get(And->getType(), 0));
         extractCond(Cmp, /*IsCondTrue=*/true, NewM,
-                    SQ.getWithInstruction(GEP));
+                    SQ.getWithInstruction(&I));
         Cmp->eraseFromParent();
+        And->eraseFromParent();
       }
     }
 
