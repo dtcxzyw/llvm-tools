@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
             Blocked = true;
             break;
           }
-        if (Path.string().find("/distance.ll") == std::string::npos)
-          continue;
+        // if (Path.string().find("/distance.ll") == std::string::npos)
+        //   continue;
         if (!Blocked)
           InputFiles.push_back(Path);
       }
