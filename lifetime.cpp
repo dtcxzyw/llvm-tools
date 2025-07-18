@@ -95,6 +95,7 @@ int main(int argc, char **argv) {
             auto *Arg = LI->getArgOperand(1);
             if (!isa<AllocaInst>(Arg) && !isa<Argument>(Arg)) {
               errs() << *Arg << '\n';
+              errs() << Path << '\n';
               std::abort();
             }
           }
