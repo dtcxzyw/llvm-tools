@@ -156,3 +156,17 @@ Good point. I also mentioned that conditional loads may be a problem. But I woul
 
 IMO introducing "secrets" to LLVM is too heavy. It is the business of static/dynamic(taint) analysis tools.
 The current proposal propagates the attribute after function inlining, so it may introduce unnecessary constraints on some innocent callers. That is a trade-off between maintainability and performance.
+
+
+I agree with @efriedma-quic. A new LLVM IR type (and a new type in C) provides a better isolation between new logic and existing optimizations. It also avoid mixing ct primitives and normal arithmetics.
+
+I used to propose an attribute-based solution in https://discourse.llvm.org/t/rfc-constant-time-execution-guarantees-in-llvm/86700. It is intended to reuse existing codebase and maintain a good performance. However, after a deep investigation on OpenSSL and BoringSSL, I found that the patterns are significantly different from other applications. Therefore, adding a set of primitives and writing specific optimizations for crypto applications seem feasible.
+
+As you pointed out in the limitations, `__builtin_ct_select` doesn't meet all the needs. I'd like to introduce a list of intrinsics like `llvm.ct.add/sub/mul/and/or/xor/shl/lshr/ashr/fshl/fshr/...`. In addition, we may need two explicit builtins to allow conversions between normal integer types and `secret` types.
+
+Beside the comments above, I still have some concerns about the builtin-based solution:
+
+1. Can these intrinsic calls be moved? In some platforms (e.g., X86 and AArch64), data-independent execution latency is controlled by some CSRs. If the user modifies the CSR before calling ct primitives, the execution order between the CSR modification and the ct arithmetic cannot be changed. Perhaps we can learn something from the FP env modeling in LLVM. 
+2. How do we model the side-effect of ct primitives (e.g., the total latency of ct primitive execution are equal in all possible paths)? I'd like to convert the constraints into SMT expressions. Then we can verify the IR transformation in Alive2.
+3. The only difference between this approach and the value barrier trick is auto-vectorization. How much effort is involved to add support for secret types in LV and SLP? How do we declare a vector secret type in C? We may use `typedef int secret_int4 __attribute__((ext_vector_type(4))) __attribute__(secret);`.
+4. Can we get in touch with developers in OpenSSL/RustCrypto community? Some insights from the downstream users are valuable. There are similar RFCs in LLVM discourse, but crypto library developers rarely get involved into the discussion. 
