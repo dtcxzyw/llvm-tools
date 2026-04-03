@@ -591,8 +591,8 @@ static void visitFunc(Function &F, Module &NewM) {
       }
     }
 
-    auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
-    if (!BI || BI->isUnconditional())
+    auto *BI = dyn_cast<CondBrInst>(BB->getTerminator());
+    if (!BI)
       continue;
     DC.registerBranch(BI);
     auto Q = SQ.getWithInstruction(&*BB->getFirstNonPHIIt());

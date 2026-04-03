@@ -336,8 +336,8 @@ public:
     case Intrinsic::allow_ubsan_check:
     case Intrinsic::ptrmask:
     case Intrinsic::is_constant:
-    case Intrinsic::convert_from_fp16:
-    case Intrinsic::convert_to_fp16:
+    // case Intrinsic::convert_from_fp16:
+    // case Intrinsic::convert_to_fp16:
     case Intrinsic::pseudoprobe:
     case Intrinsic::expect:
     case Intrinsic::expect_with_probability:
@@ -374,7 +374,7 @@ public:
 
       return Builder.CreateIntrinsic(
           IID,
-          Args.empty() ? std::nullopt
+          Args.empty() ? ArrayRef<Type *>{}
                        : ArrayRef<Type *>{Args.front()->getType()},
           Args, isa<FPMathOperator>(I) ? &I : nullptr, I.getName());
     }

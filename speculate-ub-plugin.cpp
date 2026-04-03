@@ -13,7 +13,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/PatternMatch.h>
 #include <llvm/Passes/PassBuilder.h>
-#include <llvm/Passes/PassPlugin.h>
+#include <llvm/Plugins/PassPlugin.h>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
