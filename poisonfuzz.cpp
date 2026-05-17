@@ -78,7 +78,7 @@ static bool mutate(Function &F) {
         }
         if (CB->getType()->isIntOrIntVectorTy() &&
             !CB->hasRetAttr(Attribute::Range) && randomBool()) {
-          ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false);
+          ConstantRange CR = computeConstantRange(&I, /*ForSigned=*/false, SimplifyQuery(F.getDataLayout()));
           APInt Zero = APInt::getZero(CR.getBitWidth());
           if (CR.contains(Zero) && randomBool()) {
             CB->addRangeRetAttr(
